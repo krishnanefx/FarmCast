@@ -1,5 +1,14 @@
 fastapi
 uvicorn
 onnxruntime
-numpy
 geopy
+streamlit
+plotly
+folium
+streamlit-folium
+requests
+numpy
+python-dateutil
+onnxruntime-gpu
+# If onnxruntime-gpu fails to install (no CUDA toolkit), use instead:
+# onnxruntime
