@@ -4,15 +4,13 @@ Run: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
 """
 
 import json
+import math
 import os
 import time
-import folium
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
-from branca.element import Element
 from datetime import datetime
-from streamlit_folium import st_folium
 
 from data_loader import get_forecast, get_weekly_forecast
 from decision_logic import get_all_decisions, get_worst_verdict, GOOD, CAUTION, AVOID
@@ -409,8 +407,6 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
 [data-testid="stSidebar"] input:focus-visible,
 [data-testid="stSidebar"] [data-baseweb="select"] *:focus-visible,
 [data-testid="stSidebar"] [role="slider"]:focus-visible,
-.leaflet-control-layers-selector:focus-visible,
-.leaflet-control-layers-toggle:focus-visible,
 .leaflet-control-zoom a:focus-visible {{
   outline: 3px solid #facc15 !important;
   outline-offset: 2px !important;
@@ -1031,15 +1027,15 @@ with ctrl_col3:
     st.info(f"Status: {st.session_state['livestock_status']}")
 
 # ---------------------------------------------------------------------------
-# Global Map — layered atmospheric view
+# Global Map — Offline Leaflet (local JS/CSS + inline forecast JSON)
 # ---------------------------------------------------------------------------
 st.markdown(
     "<div style='font-size:11px; letter-spacing:2px; text-transform:uppercase; "
     "color:var(--text-secondary); font-weight:500; margin-bottom:6px;'>"
-    "🌍 Global Weather Layers</div>",
+    "🌍 Global Weather Overview</div>",
     unsafe_allow_html=True,
 )
-st.caption("Toggle layers for active forecast, UK risk, wind, rain, and lat/lon grid.")
+st.caption("Forecast data visualised from Pangu-Weather model output.")
 
 
 @st.cache_data(ttl=300)
@@ -1052,168 +1048,237 @@ def _regional_layer_data(_model_hours: int) -> dict:
     return result
 
 
-def _build_global_grid(layer_obj) -> None:
-    # Latitude lines
-    for lat_line in range(-60, 61, 30):
-        folium.PolyLine(
-            locations=[(lat_line, -180), (lat_line, 180)],
-            color="rgba(255,255,255,0.28)",
-            weight=1,
-            opacity=0.45,
-            tooltip=f"Lat {lat_line}°",
-        ).add_to(layer_obj)
-    # Longitude lines
-    for lon_line in range(-150, 181, 30):
-        folium.PolyLine(
-            locations=[(-80, lon_line), (80, lon_line)],
-            color="rgba(255,255,255,0.24)",
-            weight=1,
-            opacity=0.4,
-            tooltip=f"Lon {lon_line}°",
-        ).add_to(layer_obj)
-
-
 region_layers = _regional_layer_data(model_hours)
 
 active_lat = custom_lat if custom_lat is not None else REGION_COORDS.get(selected_region, (52.8, -1.2))[0]
 active_lon = custom_lon if custom_lon is not None else REGION_COORDS.get(selected_region, (52.8, -1.2))[1]
 active_label = resolved_location_name if custom_lat is not None else selected_region
 
-global_map = folium.Map(
-    location=[20, 0],
-    zoom_start=2,
-    min_zoom=2,
-    tiles=None,
-    control_scale=True,
-    prefer_canvas=True,
-)
+# --- Write forecast data as JSON to frontend/data/ ---
+_frontend_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "data")
+os.makedirs(_frontend_data_dir, exist_ok=True)
 
-# Base maps
-folium.TileLayer("CartoDB dark_matter", name="Dark", control=True, show=True).add_to(global_map)
-folium.TileLayer("CartoDB positron", name="Light", control=True, show=False).add_to(global_map)
-folium.TileLayer(
-    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attr="Tiles © Esri",
-    name="Satellite",
-    control=True,
-    show=False,
-).add_to(global_map)
-
-# Active location layer
-active_layer = folium.FeatureGroup(name="Active Forecast", show=True)
-folium.Marker(
-    location=(active_lat, active_lon),
-    tooltip=f"{active_label} (active)",
-    popup=folium.Popup(
-        f"<b>{active_label}</b><br>"
-        f"Temp: {forecast['temperature_c']:.1f}°C<br>"
-        f"Wind: {forecast['wind_speed_kmh']:.1f} km/h<br>"
-        f"Rain prob: {forecast['precipitation_probability']*100:.0f}%",
-        max_width=220,
-    ),
-    icon=folium.Icon(color="blue", icon="cloud", prefix="fa"),
-).add_to(active_layer)
-folium.Circle(
-    location=(active_lat, active_lon),
-    radius=120000 + int(forecast["precipitation_probability"] * 160000),
-    color="#7dd3fc",
-    weight=2,
-    fill=True,
-    fill_opacity=0.12,
-).add_to(active_layer)
-active_layer.add_to(global_map)
-
-# UK verdict layer
-risk_layer = folium.FeatureGroup(name="UK Regional Risk", show=True)
-for reg, coords in REGION_COORDS.items():
-    reg_verdict = region_layers[reg]["verdict"]
-    marker_colour = MARKER_COLOURS[reg_verdict]
-    is_active = reg == selected_region and custom_lat is None
-    folium.Marker(
-        location=coords,
-        tooltip=reg,
-        popup=folium.Popup(
-            f"<b>{reg}</b><br>Verdict: {reg_verdict.title()}",
-            max_width=180,
-        ),
-        icon=folium.Icon(
-            color=marker_colour,
-            icon="leaf" if is_active else "info-sign",
-            prefix="glyphicon",
-        ),
-    ).add_to(risk_layer)
-risk_layer.add_to(global_map)
-
-# UK wind layer
-wind_layer = folium.FeatureGroup(name="UK Wind Layer", show=False)
-for reg, coords in REGION_COORDS.items():
-    reg_fc = region_layers[reg]["forecast"]
-    wind_kmh = reg_fc["wind_speed_kmh"]
-    folium.CircleMarker(
-        location=coords,
-        radius=max(5, min(16, 4 + int(wind_kmh / 6))),
-        color="#7dd3fc",
-        weight=1.5,
-        fill=True,
-        fill_color="#38bdf8",
-        fill_opacity=0.5,
-        tooltip=f"{reg}: Wind {wind_kmh:.0f} km/h",
-    ).add_to(wind_layer)
-wind_layer.add_to(global_map)
-
-# UK rain layer
-rain_layer = folium.FeatureGroup(name="UK Rain Probability", show=True)
-for reg, coords in REGION_COORDS.items():
-    reg_fc = region_layers[reg]["forecast"]
-    rain_prob = reg_fc["precipitation_probability"]
-    if rain_prob < 0.33:
-        rain_color = "#4ade80"
-    elif rain_prob < 0.66:
-        rain_color = "#fbbf24"
-    else:
-        rain_color = "#f87171"
-    folium.CircleMarker(
-        location=coords,
-        radius=max(4, min(15, 4 + int(rain_prob * 14))),
-        color=rain_color,
-        weight=1.5,
-        fill=True,
-        fill_color=rain_color,
-        fill_opacity=0.45,
-        tooltip=f"{reg}: Rain {rain_prob*100:.0f}%",
-    ).add_to(rain_layer)
-rain_layer.add_to(global_map)
-
-# Lat/Lon grid layer
-grid_layer = folium.FeatureGroup(name="Lat/Lon Grid", show=True)
-_build_global_grid(grid_layer)
-grid_layer.add_to(global_map)
-
-folium.LayerControl(collapsed=True).add_to(global_map)
-global_map.get_root().header.add_child(Element("""
-<style>
-.leaflet-control-layers-selector:focus-visible,
-.leaflet-control-layers-toggle:focus-visible,
-.leaflet-control-zoom a:focus-visible {
-  outline: 3px solid #facc15 !important;
-  outline-offset: 2px !important;
-  box-shadow: 0 0 0 4px rgba(250,204,21,0.35) !important;
+_map_data = {
+    "active": {
+        "lat": active_lat,
+        "lon": active_lon,
+        "label": active_label,
+        "temp_c": round(forecast["temperature_c"], 1),
+        "wind_kmh": round(forecast["wind_speed_kmh"], 0),
+        "rain_pct": round(forecast["precipitation_probability"] * 100, 0),
+        "frost": forecast["frost_risk"],
+    },
+    "regions": [],
 }
+
+_VERDICT_HEX = {GOOD: "#4ade80", CAUTION: "#fbbf24", AVOID: "#f87171"}
+for reg_name, coords in REGION_COORDS.items():
+    rl = region_layers[reg_name]
+    fc_r = rl["forecast"]
+    v = rl["verdict"]
+    _map_data["regions"].append({
+        "name": reg_name,
+        "lat": coords[0],
+        "lon": coords[1],
+        "temp_c": round(fc_r["temperature_c"], 1),
+        "wind_kmh": round(fc_r["wind_speed_kmh"], 0),
+        "wind_dir": round(fc_r.get("wind_direction_deg", 0), 0),
+        "rain_pct": round(fc_r["precipitation_probability"] * 100, 0),
+        "frost": fc_r["frost_risk"],
+        "verdict": v,
+        "colour": _VERDICT_HEX.get(v, "#7dd3fc"),
+    })
+
+_map_json_path = os.path.join(_frontend_data_dir, "map_forecast.json")
+with open(_map_json_path, "w") as _f:
+    json.dump(_map_data, _f, indent=2)
+
+# --- Read local Leaflet assets ---
+_lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "lib")
+_leaflet_css = ""
+_leaflet_js = ""
+_css_path = os.path.join(_lib_dir, "leaflet.css")
+_js_path = os.path.join(_lib_dir, "leaflet.js")
+if os.path.exists(_css_path):
+    with open(_css_path) as _f:
+        _leaflet_css = _f.read()
+if os.path.exists(_js_path):
+    with open(_js_path) as _f:
+        _leaflet_js = _f.read()
+
+# --- Build self-contained Leaflet HTML ---
+_map_data_json = json.dumps(_map_data)
+
+_leaflet_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>{_leaflet_css}</style>
+<style>
+  html, body, #map {{
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: rgb(15, 23, 42);
+    font-family: 'DM Sans', sans-serif;
+  }}
+  .leaflet-container {{
+    background: rgb(15, 23, 42) !important;
+  }}
+  .leaflet-control-attribution {{
+    background: rgba(0,0,0,0.5) !important;
+    color: rgba(255,255,255,0.4) !important;
+    font-size: 10px !important;
+  }}
+  .leaflet-control-attribution a {{
+    color: rgba(125,211,252,0.6) !important;
+  }}
+  .leaflet-control-zoom a {{
+    background: rgba(30,41,59,0.9) !important;
+    color: rgba(255,255,255,0.8) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+  }}
+  .fc-popup .leaflet-popup-content-wrapper {{
+    background: rgba(15,23,42,0.95);
+    color: #e2e8f0;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }}
+  .fc-popup .leaflet-popup-tip {{
+    background: rgba(15,23,42,0.95);
+  }}
+  .fc-popup .leaflet-popup-content {{
+    margin: 10px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+  }}
+  .fc-popup b {{ color: #7dd3fc; }}
+  .verdict-pill {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }}
 </style>
-"""))
+</head>
+<body>
+<div id="map"></div>
+<script>{_leaflet_js}</script>
+<script>
+const data = {_map_data_json};
 
-map_result = st_folium(
-    global_map,
-    width="100%",
-    height=500,
-    returned_objects=["last_object_clicked_tooltip"],
-)
+const map = L.map('map', {{
+  center: [54.0, -2.5],
+  zoom: 6,
+  zoomControl: true,
+  attributionControl: true,
+}});
 
-if map_result and map_result.get("last_object_clicked_tooltip"):
-    clicked_region = map_result["last_object_clicked_tooltip"]
-    if clicked_region in REGIONS and clicked_region != selected_region:
-        st.query_params["region"] = clicked_region
-        st.rerun()
+// Dark solid background (offline-friendly — no tile CDN needed)
+L.tileLayer('', {{
+  attribution: 'FarmCast · Pangu-Weather'
+}}).addTo(map);
+
+// Draw simple country outlines as reference grid lines
+const gridGroup = L.layerGroup().addTo(map);
+// Lat lines
+for (let lat = -60; lat <= 80; lat += 10) {{
+  L.polyline([[lat, -180], [lat, 180]], {{
+    color: 'rgba(255,255,255,0.08)', weight: 1, interactive: false
+  }}).addTo(gridGroup);
+}}
+// Lon lines
+for (let lon = -180; lon <= 180; lon += 10) {{
+  L.polyline([[-80, lon], [80, lon]], {{
+    color: 'rgba(255,255,255,0.06)', weight: 1, interactive: false
+  }}).addTo(gridGroup);
+}}
+
+function makePopup(d, isActive) {{
+  const frost = d.frost ? '❄️ Yes' : 'No';
+  const verdict = d.verdict
+    ? `<span class="verdict-pill" style="background:${{d.colour}}33;color:${{d.colour}}">${{d.verdict}}</span>`
+    : '';
+  return `<div class="fc-popup">`
+    + `<b>${{d.label || d.name}}</b>${{isActive ? ' <span style="color:#7dd3fc;font-size:10px;">(active)</span>' : ''}}<br>`
+    + `🌡 ${{d.temp_c}}°C &nbsp; 💨 ${{d.wind_kmh}} km/h<br>`
+    + `🌧 Rain ${{d.rain_pct}}% &nbsp; ❄ Frost: ${{frost}}<br>`
+    + verdict
+    + `</div>`;
+}}
+
+// Regional markers
+data.regions.forEach(r => {{
+  // Rain halo
+  L.circle([r.lat, r.lon], {{
+    radius: 30000 + r.rain_pct * 800,
+    color: r.colour,
+    weight: 0,
+    fillColor: r.colour,
+    fillOpacity: 0.12,
+    interactive: false,
+  }}).addTo(map);
+
+  // Verdict circle marker
+  const marker = L.circleMarker([r.lat, r.lon], {{
+    radius: 10,
+    color: r.colour,
+    weight: 2,
+    fillColor: r.colour,
+    fillOpacity: 0.35,
+  }}).addTo(map);
+
+  marker.bindPopup(makePopup(r, false), {{className: 'fc-popup'}});
+  marker.bindTooltip(`${{r.name}}: ${{r.temp_c}}°C`, {{
+    permanent: true,
+    direction: 'top',
+    offset: [0, -12],
+    className: '',
+  }}).openTooltip();
+
+  // Wind direction line
+  const rad = r.wind_dir * Math.PI / 180;
+  const scale = Math.min(r.wind_kmh / 50, 1) * 0.8;
+  const endLat = r.lat + scale * Math.cos(rad);
+  const endLon = r.lon + scale * Math.sin(rad);
+  L.polyline([[r.lat, r.lon], [endLat, endLon]], {{
+    color: 'rgba(125,211,252,0.5)',
+    weight: 2,
+    dashArray: '4 4',
+    interactive: false,
+  }}).addTo(map);
+}});
+
+// Active forecast marker (star-like — large pulsing circle)
+const act = data.active;
+L.circle([act.lat, act.lon], {{
+  radius: 50000,
+  color: '#7dd3fc',
+  weight: 1.5,
+  fillColor: '#7dd3fc',
+  fillOpacity: 0.08,
+  interactive: false,
+}}).addTo(map);
+
+const activeMarker = L.circleMarker([act.lat, act.lon], {{
+  radius: 14,
+  color: '#7dd3fc',
+  weight: 3,
+  fillColor: '#0ea5e9',
+  fillOpacity: 0.7,
+}}).addTo(map);
+activeMarker.bindPopup(makePopup(act, true), {{className: 'fc-popup'}});
+activeMarker.bindTooltip(`⭐ ${{act.label}}`, {{
+  permanent: true,
+  direction: 'bottom',
+  offset: [0, 12],
+}}).openTooltip();
+</script>
+</body>
+</html>"""
+
+components.html(_leaflet_html, height=520, scrolling=False)
 
 with st.expander("♿ Accessibility Features"):
     st.markdown(f"""
