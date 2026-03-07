@@ -212,7 +212,10 @@ def _mock_forecast(region: str) -> dict:
 
 def get_forecast(
     region: str,
-    model_path: str = "/Users/krishnanadaikkappan/Downloads/pangu_weather_1.onnx",
+    lat: float = None,
+    lon: float = None,
+    model_hours: int = 1,
+    model_path: str = None,
     input_dir:  str = "../input_data",
     output_dir: str = "../output_data",
     force_refresh: bool = False,
@@ -237,6 +240,13 @@ def get_forecast(
     wind_direction_deg, precipitation_mm, precipitation_probability,
     frost_risk, hourly.
     """
+    if lat is None or lon is None:
+        coords = REGION_COORDS.get(region, REGION_COORDS["East Midlands"])
+        lat, lon = coords
+        
+    if model_path is None:
+        model_path = f"/Users/krishnanadaikkappan/Downloads/pangu_weather_{model_hours}.onnx"
+
     # Resolve paths relative to this file's directory so the app works regardless
     # of the process working directory.
     base_dir = os.path.dirname(os.path.abspath(__file__))
