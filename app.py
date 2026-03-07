@@ -406,7 +406,7 @@ active_rain_colours = _vision_profile["rain_colours"]
 # ---------------------------------------------------------------------------
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Serif+Display&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap');
 
 :root {{
   --bg-top:         {_t['bg_top']};
@@ -835,8 +835,8 @@ st.markdown(f"""
               margin-bottom:10px;">
     🌾 FARMCAST &nbsp;·&nbsp; {resolved_location_name.upper()}
   </div>
-  <div class="hero-temp" style="font-family:'DM Serif Display', Georgia, serif;
-              font-size:96px; font-weight:400; color:var(--text-primary);
+  <div class="hero-temp" style="font-family:'DM Sans', sans-serif;
+              font-size:96px; font-weight:300; color:var(--text-primary);
               line-height:1; margin-bottom:8px;
               text-shadow: 0 4px 40px rgba(0,0,0,0.3);">
     {display_temp_major:.0f}°{display_temp_unit}
