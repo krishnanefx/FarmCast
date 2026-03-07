@@ -28,12 +28,14 @@ pangu_weather_1.onnx
 input_data/
     input_surface.npy       # (4, 721, 1440) float32 — MSLP, U10, V10, T2M
     input_upper.npy         # (5, 13, 721, 1440) float32 — Z, Q, T, U, V
-output_data/                # created automatically; cache stored here
+    era5_meta.json          # written by fetch_era5.py — date/source metadata
+output_data/                # created automatically; inference cache stored here
 LenovoNvidia/               # repo root
     app.py
     data_loader.py
     decision_logic.py
     ollama_client.py
+    fetch_era5.py
     requirements.txt
     README.md
 ```
@@ -136,6 +138,45 @@ fc = get_forecast("East Midlands", force_refresh=True)
 ```
 
 This schema is the contract between `data_loader.py` and the rest of the app. **Only `data_loader.py` ever needs to change** when swapping or updating the weather model.
+
+---
+
+## Getting real ERA5 data
+
+`fetch_era5.py` downloads real ERA5 reanalysis data from the Copernicus Climate
+Data Store and converts it into the exact numpy arrays required by Pangu-Weather.
+ERA5 has a ~5-day reanalysis lag; the script automatically targets a date 7 days
+ago to stay within the available window.
+
+### One-time setup
+
+1. Register at **https://cds.climate.copernicus.eu** and accept the terms for both:
+   - `reanalysis-era5-single-levels`
+   - `reanalysis-era5-pressure-levels`
+2. Get your Personal Access Token from **https://cds.climate.copernicus.eu/profile**
+3. Create `~/.cdsapirc`:
+   ```
+   url: https://cds.climate.copernicus.eu/api
+   key: <PERSONAL-ACCESS-TOKEN>
+   ```
+4. Install the ERA5 dependencies:
+   ```bash
+   pip install cdsapi cfgrib xarray eccodes
+   ```
+
+### Fetch and run
+
+```bash
+# From the repo root — downloads ~500 MB of grib data
+python fetch_era5.py
+
+# The script saves input_surface.npy and input_upper.npy to ../input_data/
+# and deletes the stale Pangu cache so the next run re-infers from real data.
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+```
+
+The Streamlit sidebar shows **⚡ GPU Active** or **💻 CPU Mode** and the
+🔄 **Run Fresh Forecast** button triggers live inference immediately.
 
 ---
 
