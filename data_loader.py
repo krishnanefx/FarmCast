@@ -256,7 +256,7 @@ def get_forecast(
         lat, lon = coords
         
     if model_path is None:
-        model_path = f"/Users/krishnanadaikkappan/Downloads/pangu_weather_{model_hours}.onnx"
+        model_path = f"/home/green5/pangu_weather_{model_hours}.onnx"
 
     # Resolve paths relative to this file's directory so the app works regardless
     # of the process working directory.
@@ -470,8 +470,8 @@ def _mock_weekly_forecast(region: str) -> list:
 
 def get_weekly_forecast(
     region: str,
-    model_6h_path:  str = "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx",
-    model_24h_path: str = "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx",
+    model_6h_path:  str = "/home/green5/pangu_weather_6.onnx",
+    model_24h_path: str = "/home/green5/pangu_weather_24.onnx",
     input_dir:      str = "../input_data",
     output_dir:     str = "../output_data",
     force_refresh:  bool = False,

@@ -33,8 +33,8 @@ import numpy as np
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _PARENT     = os.path.join(_HERE, "..")
 
-MODEL_6H    = "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx"
-MODEL_24H   = "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx"
+MODEL_6H    = "/home/green5/pangu_weather_6.onnx"
+MODEL_24H   = "/home/green5/pangu_weather_24.onnx"
 INPUT_DIR   = os.path.join(_PARENT, "input_data")
 CACHE_DIR   = os.path.join(_PARENT, "output_data", "weekly_cache")
 MANIFEST    = os.path.join(CACHE_DIR, "manifest.json")
