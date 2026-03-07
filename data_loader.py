@@ -283,8 +283,17 @@ def get_forecast(
     wind_speed_kmh    = round(wind_speed_ms * 3.6, 2)
     wind_direction_deg = round((math.degrees(math.atan2(u10, v10)) + 180.0) % 360.0, 1)
 
-    # Precipitation heuristic: low pressure → higher rain probability
-    precip_probability = round(min(1.0, max(0.0, (mslp - 99000.0) / -3000.0)), 3)
+    # Multi-factor precipitation heuristic
+    # Low pressure increases rain probability
+    mslp_factor = float(np.clip((101325.0 - mslp) / 3000.0, 0.0, 1.0))
+    # Westerly winds (225-270°) bring Atlantic moisture to the UK
+    wind_dir_rad = math.radians(wind_direction_deg)
+    westerly_factor = float(np.clip((math.cos(wind_dir_rad - math.radians(247)) + 1.0) / 2.0, 0.0, 1.0))
+    wind_mag_factor = float(np.clip(wind_speed_kmh / 60.0, 0.0, 1.0))
+    precip_probability = round(float(np.clip(
+        0.5 * mslp_factor + 0.3 * westerly_factor * wind_mag_factor + 0.1,
+        0.0, 1.0,
+    )), 3)
     precipitation_mm   = round(precip_probability * 3.0, 2)
 
     frost_risk = temperature_c < 2.0
