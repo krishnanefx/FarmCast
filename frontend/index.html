@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Weather Prediction</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="background">
+        <div class="blob1"></div>
+        <div class="blob2"></div>
+    </div>
+    <div class="container">
+        <header>
+            <h1>Pangu-Weather</h1>
+            <p>Advanced Global Weather Forecasting via ONNX Runtime</p>
+        </header>
+
+        <main>
+            <form id="weather-form">
+                <div class="input-group">
+                    <label for="location">Location</label>
+                    <input type="text" id="location" placeholder="e.g. Tokyo, London, New York" required>
+                </div>
+                
+                <div class="input-group">
+                    <label for="model-select">Forecast Window</label>
+                    <select id="model-select" required>
+                        <option value="1">1 Hour Prediction</option>
+                        <option value="3">3 Hour Prediction</option>
+                        <option value="6">6 Hour Prediction</option>
+                        <option value="24" selected>24 Hour Prediction</option>
+                    </select>
+                </div>
+                
+                <button type="submit" id="submit-btn">
+                    <span class="btn-text">Predict Weather</span>
+                    <span class="loader hidden"></span>
+                </button>
+            </form>
+
+            <div id="results-container" class="hidden">
+                <div class="result-header">
+                    <h2 id="result-location">City Name</h2>
+                    <p id="result-coords">Lat: 0, Lon: 0</p>
+                </div>
+                
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon temp-icon"></div>
+                        <h3>Temperature</h3>
+                        <p id="metric-temp" class="metric-value">-- °C</p>
+                        <p class="metric-sub">2m above ground</p>
+                    </div>
+                    
+                    <div class="metric-card">
+                        <div class="metric-icon wind-icon"></div>
+                        <h3>Wind Speed</h3>
+                        <p id="metric-wind" class="metric-value">-- m/s</p>
+                        <p class="metric-sub">10m above ground</p>
+                    </div>
+                    
+                    <div class="metric-card">
+                        <div class="metric-icon pressure-icon"></div>
+                        <h3>Sea Level Pressure</h3>
+                        <p id="metric-pressure" class="metric-value">-- hPa</p>
+                        <p class="metric-sub">Mean sea level</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="error-container" class="hidden">
+                <p id="error-message">An error occurred.</p>
+            </div>
+        </main>
+    </div>
+    
+    <script src="/static/script.js"></script>
+</body>
+</html>
