@@ -70,10 +70,6 @@ def _run_inference(model_path: str, input_dir: str, output_dir: str) -> tuple:
     input_surface = np.load(surface_path).astype(np.float32)   # (4, 721, 1440)
     input_upper   = np.load(upper_path).astype(np.float32)     # (5, 13, 721, 1440)
 
-    # Add batch dimension expected by ONNX model
-    input_surface_b = input_surface[np.newaxis, ...]   # (1, 4, 721, 1440)
-    input_upper_b   = input_upper[np.newaxis, ...]     # (1, 5, 13, 721, 1440)
-
     providers = (
         ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if "CUDAExecutionProvider" in ort.get_available_providers()
@@ -85,11 +81,11 @@ def _run_inference(model_path: str, input_dir: str, output_dir: str) -> tuple:
 
     outputs = sess.run(
         ["output", "output_surface"],
-        {"input": input_upper_b, "input_surface": input_surface_b},
+        {"input": input_upper, "input_surface": input_surface},
     )
 
-    output_upper   = outputs[0][0]   # remove batch dim → (5, 13, 721, 1440)
-    output_surface = outputs[1][0]   # remove batch dim → (4, 721, 1440)
+    output_upper   = outputs[0]   # (5, 13, 721, 1440)
+    output_surface = outputs[1]   # (4, 721, 1440)
 
     return output_upper, output_surface
 
