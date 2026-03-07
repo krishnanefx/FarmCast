@@ -19,6 +19,7 @@ Public API
         Returns the number of cached steps valid for the current input data.
 """
 
+import gc
 import hashlib
 import json
 import os
@@ -32,8 +33,8 @@ import numpy as np
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _PARENT     = os.path.join(_HERE, "..")
 
-MODEL_6H    = os.path.join(_PARENT, "pangu_weather_6.onnx")
-MODEL_24H   = os.path.join(_PARENT, "pangu_weather_24.onnx")
+MODEL_6H    = "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx"
+MODEL_24H   = "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx"
 INPUT_DIR   = os.path.join(_PARENT, "input_data")
 CACHE_DIR   = os.path.join(_PARENT, "output_data", "weekly_cache")
 MANIFEST    = os.path.join(CACHE_DIR, "manifest.json")
@@ -51,15 +52,11 @@ _STEPS = (
 
 
 # ---------------------------------------------------------------------------
-# Lazy ONNX session loader — loads each model once per process
+# Session Control
 # ---------------------------------------------------------------------------
-_sessions: dict = {}
 
-
-def _get_session(model_key: str):
-    if model_key in _sessions:
-        return _sessions[model_key]
-
+def _load_session(model_key: str):
+    """Load an ONNX session explicitly without permanent caching."""
     try:
         import onnxruntime as ort
     except ImportError as exc:
@@ -75,9 +72,7 @@ def _get_session(model_key: str):
         else ["CPUExecutionProvider"]
     )
     print(f"[pangu_inference] Loading {model_key} model with {providers[0]}")
-    sess = ort.InferenceSession(model_path, providers=providers)
-    _sessions[model_key] = sess
-    return sess
+    return ort.InferenceSession(model_path, providers=providers)
 
 
 # ---------------------------------------------------------------------------
@@ -125,12 +120,11 @@ def _cache_valid(step_idx: int, current_hash: str, manifest: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def _run_step(
-    model_key: str,
+    sess: "ort.InferenceSession",
     input_upper: np.ndarray,
     input_surface: np.ndarray,
 ) -> tuple:
     """Run one Pangu-Weather step; returns (output_upper, output_surface)."""
-    sess = _get_session(model_key)
     outputs = sess.run(
         ["output", "output_surface"],
         {"input": input_upper, "input_surface": input_surface},
@@ -191,7 +185,9 @@ def run_weekly_inference(force_refresh: bool = False) -> list:
     cur_upper   = np.load(UPPER_NPY).astype(np.float32)
 
     results = []
-    step_loaded_from_cache = False
+    
+    current_model_key = None
+    active_session = None
 
     for step_idx, model_key, lead_hour in _STEPS:
         cache_path = _step_cache_path(step_idx)
@@ -202,16 +198,20 @@ def run_weekly_inference(force_refresh: bool = False) -> list:
             data = np.load(cache_path)
             out_upper   = data["output_upper"]
             out_surface = data["output_surface"]
-            step_loaded_from_cache = True
             print(f"[pangu_inference] Step {step_idx:02d} ({lead_hour:3d}h): loaded from cache")
         else:
-            # If we were loading from cache and hit an uncached step, we need
-            # cur_surface/cur_upper from the previous step's output.
-            # At this point cur_surface/cur_upper already hold the correct
-            # state (either initial or last computed step's output), so we
-            # can run inference directly.
+            # If we need to run a step but the model changed since the last step,
+            # we unload the old one (if it exists) to preserve main memory.
+            if current_model_key != model_key:
+                if active_session is not None:
+                    print(f"[pangu_inference] Unloading {current_model_key} session…")
+                    del active_session
+                    gc.collect()
+                active_session = _load_session(model_key)
+                current_model_key = model_key
+
             print(f"[pangu_inference] Step {step_idx:02d} ({lead_hour:3d}h): running {model_key} model…")
-            out_upper, out_surface = _run_step(model_key, cur_upper, cur_surface)
+            out_upper, out_surface = _run_step(active_session, cur_upper, cur_surface)
 
             # Cache this step
             np.savez_compressed(
@@ -220,6 +220,9 @@ def run_weekly_inference(force_refresh: bool = False) -> list:
                 output_surface=out_surface,
             )
             print(f"[pangu_inference] Step {step_idx:02d}: cached → {cache_path}")
+            
+            # Explicit garbage collection to stop onnx intermediate tensors from surviving
+            gc.collect()
 
         # Advance the rolling state for the next step
         cur_upper   = out_upper
@@ -232,6 +235,10 @@ def run_weekly_inference(force_refresh: bool = False) -> list:
             "output_upper":   out_upper,
             "output_surface": out_surface,
         })
+        
+    if active_session is not None:
+        del active_session
+        gc.collect()
 
     # Save manifest with current hash
     _save_manifest({"input_hash": current_hash, "steps": len(_STEPS)})
