@@ -1,0 +1,7 @@
+streamlit
+plotly
+folium
+streamlit-folium
+requests
+numpy
+python-dateutil
