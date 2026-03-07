@@ -121,12 +121,13 @@ with st.sidebar:
     st.divider()
     try:
         import onnxruntime as _ort
-        _gpu = "CUDAExecutionProvider" in _ort.get_available_providers()
+        _providers = _ort.get_available_providers()
+        _gpu = "CUDAExecutionProvider" in _providers or "CoreMLExecutionProvider" in _providers
     except ImportError:
         _gpu = False
 
     gpu_colour = "#4ade80" if _gpu else "#fbbf24"
-    gpu_label  = "⚡ GPU Active" if _gpu else "💻 CPU Mode"
+    gpu_label  = "⚡ AI Accelerator Active" if _gpu else "💻 CPU Mode"
     st.markdown(
         f'<div style="font-weight:700; color:{gpu_colour}; font-size:14px;">{gpu_label}</div>',
         unsafe_allow_html=True,

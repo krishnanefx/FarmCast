@@ -71,11 +71,13 @@ def _run_inference(model_path: str, input_dir: str, output_dir: str) -> tuple:
     input_surface = np.load(surface_path).astype(np.float32)   # (4, 721, 1440)
     input_upper   = np.load(upper_path).astype(np.float32)     # (5, 13, 721, 1440)
 
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if "CUDAExecutionProvider" in ort.get_available_providers()
-        else ["CPUExecutionProvider"]
-    )
+    available_providers = ort.get_available_providers()
+    if "CUDAExecutionProvider" in available_providers:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif "CoreMLExecutionProvider" in available_providers:
+        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    else:
+        providers = ["CPUExecutionProvider"]
     print(f"[FarmCast] Running Pangu-Weather inference with: {providers[0]}")
 
     sess = ort.InferenceSession(model_path, providers=providers)

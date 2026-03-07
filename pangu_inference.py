@@ -66,11 +66,13 @@ def _load_session(model_key: str):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Pangu-Weather model not found: {model_path}")
 
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if "CUDAExecutionProvider" in ort.get_available_providers()
-        else ["CPUExecutionProvider"]
-    )
+    available_providers = ort.get_available_providers()
+    if "CUDAExecutionProvider" in available_providers:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif "CoreMLExecutionProvider" in available_providers:
+        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    else:
+        providers = ["CPUExecutionProvider"]
     print(f"[pangu_inference] Loading {model_key} model with {providers[0]}")
     return ort.InferenceSession(model_path, providers=providers)
 
