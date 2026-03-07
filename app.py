@@ -290,15 +290,13 @@ fig.update_layout(
         tickfont=dict(size=12),
     ),
     yaxis=dict(
-        title="Temperature (°C)",
-        titlefont=dict(color=C_GREEN_MID),
+        title=dict(text="Temperature (°C)", font=dict(color=C_GREEN_MID)),
         tickfont=dict(color=C_GREEN_MID, size=12),
         gridcolor="#e0dbd0",
         zeroline=False,
     ),
     yaxis2=dict(
-        title="Wind Speed (km/h)",
-        titlefont=dict(color=C_BROWN_MID),
+        title=dict(text="Wind Speed (km/h)", font=dict(color=C_BROWN_MID)),
         tickfont=dict(color=C_BROWN_MID, size=12),
         overlaying="y",
         side="right",
@@ -306,8 +304,7 @@ fig.update_layout(
         zeroline=False,
     ),
     yaxis3=dict(
-        title="Precip Prob (%)",
-        titlefont=dict(color="rgba(139,105,20,0.6)"),
+        title=dict(text="Precip Prob (%)", font=dict(color="rgba(139,105,20,0.6)")),
         tickfont=dict(color="rgba(139,105,20,0.6)", size=11),
         overlaying="y",
         side="right",
