@@ -17,6 +17,7 @@ import os
 import random
 import warnings
 from datetime import datetime, timedelta
+from typing import Optional
 
 import numpy as np
 
@@ -150,20 +151,21 @@ def _load_or_run(model_path: str, input_dir: str, output_dir: str,
 # ---------------------------------------------------------------------------
 
 def _generate_hourly(base_temp: float, base_wind: float,
-                     precip_base: float) -> list:
+                     precip_base: float, base_humidity: Optional[float] = None) -> list:
     """
-    Build 18 hourly entries (06:00–23:00) with realistic diurnal variation.
+    Build 24 hourly entries (00:00–23:00) with realistic diurnal variation.
 
-    base_temp  — the 18:00 forecast temperature (°C); used as the reference.
-    base_wind  — base wind speed (km/h); varies ±20% sinusoidally.
-    precip_base — base precipitation probability; varies ±0.1.
+    base_temp     — reference temperature (°C)
+    base_wind     — base wind speed (km/h)
+    precip_base   — base precipitation probability
+    base_humidity — base relative humidity (%), optional
 
-    Temperature minimum at 06:00, maximum at 14:00.
-    The 18:00 slot sits on the declining side of the diurnal curve.
+    Internally we model the daytime curve over 06:00–23:00, then extend
+    00:00–05:00 as a continuation of late-evening conditions.
     """
-    hours = [f"{h:02d}:00" for h in range(6, 24)]   # 18 entries
-    n = len(hours)
-    result = []
+    daylight_hours = [f"{h:02d}:00" for h in range(6, 24)]  # 18 entries
+    n = len(daylight_hours)
+    daylight_result = []
 
     # Map each hour index to a fraction of the diurnal cycle.
     # Hour 6 = 0 h past 06:00, hour 23 = 17 h past 06:00.
@@ -185,7 +187,10 @@ def _generate_hourly(base_temp: float, base_wind: float,
     # Shift base_temp so that temp(18:00) == base_temp
     shifted_base = base_temp - TEMP_AMPLITUDE * factor_at_18
 
-    for i, hour in enumerate(hours):
+    if base_humidity is None:
+        base_humidity = float(np.clip(45.0 + precip_base * 45.0, 25.0, 100.0))
+
+    for i, hour in enumerate(daylight_hours):
         factor = _diurnal_factor(i)
         temp_c = shifted_base + TEMP_AMPLITUDE * factor
 
@@ -196,15 +201,40 @@ def _generate_hourly(base_temp: float, base_wind: float,
         # Precipitation probability: ±0.1, rising gently into the afternoon
         t = i / (n - 1)
         precip_prob = precip_base + 0.1 * math.sin(math.pi * t)
+        humidity_pct = base_humidity - 8.0 * factor + 10.0 * (precip_prob - precip_base)
 
-        result.append({
+        daylight_result.append({
             "hour": hour,
             "temp_c":      round(max(-20.0, min(45.0, temp_c)), 1),
             "wind_kmh":    round(max(0.0, wind_kmh), 1),
             "precip_prob": round(max(0.0, min(1.0, precip_prob)), 2),
+            "humidity_pct": round(float(np.clip(humidity_pct, 20.0, 100.0)), 1),
         })
 
-    return result
+    # Expand to 24h (00:00–23:00).
+    # 00:00–05:00 are approximated from 18:00–23:00 with slight overnight cooling.
+    full_result = []
+    for hour_num in range(24):
+        if hour_num >= 6:
+            src = daylight_result[hour_num - 6]
+            full_result.append({
+                "hour": f"{hour_num:02d}:00",
+                "temp_c": src["temp_c"],
+                "wind_kmh": src["wind_kmh"],
+                "precip_prob": src["precip_prob"],
+            })
+            continue
+
+        src = daylight_result[hour_num + 12]  # map 00–05 -> 18–23 profile
+        full_result.append({
+            "hour": f"{hour_num:02d}:00",
+            "temp_c": round(max(-20.0, min(45.0, src["temp_c"] - 0.6)), 1),
+            "wind_kmh": round(max(0.0, src["wind_kmh"] * 0.92), 1),
+            "precip_prob": round(max(0.0, min(1.0, src["precip_prob"])), 2),
+            "humidity_pct": round(float(np.clip(src.get("humidity_pct", base_humidity) + 4.0, 20.0, 100.0)), 1),
+        })
+
+    return full_result
 
 
 # ---------------------------------------------------------------------------
@@ -223,15 +253,21 @@ _MOCK_PROFILES = {
 
 def _mock_forecast(region: str) -> dict:
     profile = _MOCK_PROFILES.get(region, _MOCK_PROFILES["East Midlands"])
+    humidity_percent = float(np.clip(
+        profile.get("humidity_percent", 45.0 + profile["precipitation_probability"] * 45.0),
+        20.0, 100.0
+    ))
     hourly = _generate_hourly(
         base_temp=profile["temperature_c"],
         base_wind=profile["wind_speed_kmh"],
         precip_base=profile["precipitation_probability"],
+        base_humidity=humidity_percent,
     )
     return {
         "region": region,
         "forecast_time": (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00"),
         **profile,
+        "humidity_percent": round(humidity_percent, 1),
         "hourly": hourly,
     }
 
@@ -354,10 +390,24 @@ def get_forecast(
 
     frost_risk = temperature_c < 2.0
 
+    # Relative humidity estimate:
+    # Prefer near-surface specific humidity from output_upper if available.
+    try:
+        q_surface = float(output_upper[1, -1, lat_idx, lon_idx])  # specific humidity kg/kg
+        q_surface = float(np.clip(q_surface, 0.0, 0.05))
+        p_surface_pa = 100000.0
+        vapor_pressure_pa = (q_surface * p_surface_pa) / (0.622 + 0.378 * q_surface + 1e-9)
+        sat_vapor_pressure_pa = 611.2 * math.exp((17.67 * temperature_c) / (temperature_c + 243.5))
+        humidity_percent = float(np.clip((vapor_pressure_pa / max(sat_vapor_pressure_pa, 1e-6)) * 100.0, 0.0, 100.0))
+    except Exception:
+        humidity_percent = float(np.clip(45.0 + precip_probability * 45.0, 20.0, 100.0))
+    humidity_percent = round(humidity_percent, 1)
+
     hourly = _generate_hourly(
         base_temp=temperature_c,
         base_wind=wind_speed_kmh,
         precip_base=precip_probability,
+        base_humidity=humidity_percent,
     )
 
     forecast_time = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00")
@@ -370,6 +420,7 @@ def get_forecast(
         "wind_direction_deg":       wind_direction_deg,
         "precipitation_mm":         precipitation_mm,
         "precipitation_probability": precip_probability,
+        "humidity_percent":         humidity_percent,
         "frost_risk":               frost_risk,
         "hourly":                   hourly,
     }

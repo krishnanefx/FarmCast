@@ -1,3 +1,13 @@
+const UK_REGIONS = [
+    "East Midlands",
+    "Yorkshire",
+    "East Anglia",
+    "Southwest England",
+    "Wales",
+    "Scotland",
+    "Northern Ireland",
+];
+
 function toActionableHint(message = "") {
     const lower = message.toLowerCase();
     if (lower.includes("location not found")) {
@@ -15,23 +25,46 @@ function toActionableHint(message = "") {
     return "Check model files, source inputs, and API service health, then retry.";
 }
 
-export async function fetchWeather({ location, model }) {
+async function requestWeather(payload) {
     const response = await fetch("/api/weather", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({ location, model }),
+        body: JSON.stringify(payload),
     });
 
-    const payload = await response.json().catch(() => ({}));
+    const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-        const detail = payload.detail || "Unable to fetch weather prediction.";
+        const detail = body.detail || "Unable to fetch weather prediction.";
         const error = new Error(detail);
         error.help = toActionableHint(detail);
         error.status = response.status;
         throw error;
     }
 
-    return payload;
+    return body;
+}
+
+export async function fetchWeather({ location, model }) {
+    return requestWeather({ location, model });
+}
+
+export async function fetchRegionalForecasts({ model }) {
+    const calls = UK_REGIONS.map((region) =>
+        requestWeather({ location: region, model })
+    );
+    const settled = await Promise.allSettled(calls);
+
+    return settled.map((result, index) => {
+        const region = UK_REGIONS[index];
+        if (result.status === "fulfilled") {
+            return { region, data: result.value, error: null };
+        }
+        return {
+            region,
+            data: null,
+            error: result.reason?.message || "Regional forecast unavailable.",
+        };
+    });
 }
