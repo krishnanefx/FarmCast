@@ -6,11 +6,12 @@ Run: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
 import json
 import os
 import folium
+import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime
 from streamlit_folium import st_folium
 
-from data_loader import get_forecast
+from data_loader import get_forecast, get_weekly_forecast
 from decision_logic import get_all_decisions, get_worst_verdict, GOOD, CAUTION, AVOID
 from ollama_client import get_advisory, DEFAULT_MODEL
 
@@ -74,8 +75,9 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.divider()
-    run_fresh = st.button("🔄 Run Fresh Forecast", use_container_width=True, type="primary")
+    run_fresh = st.button("🔄 Refresh All Forecasts", use_container_width=True, type="primary")
     st.caption("Re-runs Pangu-Weather ONNX inference on the DGX GPU.")
+    st.caption("📅 7-day: Days 1–2 via 6h model, Days 3–7 via 24h model.")
 
 st.query_params["region"] = selected_region
 
@@ -83,11 +85,30 @@ st.query_params["region"] = selected_region
 # Load forecast
 # ---------------------------------------------------------------------------
 if run_fresh:
+    # Clear weekly session cache on refresh
+    for _k in ["weekly_forecast", "weekly_region"]:
+        st.session_state.pop(_k, None)
     with st.spinner("Running Pangu-Weather inference on DGX GPU..."):
         forecast = get_forecast(selected_region, force_refresh=True)
+    with st.spinner("Running 7-day iterative forecast chain..."):
+        weekly = get_weekly_forecast(selected_region, force_refresh=True)
+    st.session_state["weekly_forecast"] = weekly
+    st.session_state["weekly_region"]   = selected_region
     st.success(f"✅ Inference complete — {forecast['forecast_time']}")
 else:
     forecast = get_forecast(selected_region)
+
+# Load weekly forecast — cached in session_state per region
+if (
+    "weekly_forecast" not in st.session_state
+    or st.session_state.get("weekly_region") != selected_region
+):
+    with st.spinner("Building 7-day forecast..."):
+        weekly = get_weekly_forecast(selected_region)
+    st.session_state["weekly_forecast"] = weekly
+    st.session_state["weekly_region"]   = selected_region
+else:
+    weekly = st.session_state["weekly_forecast"]
 
 decisions     = get_all_decisions(forecast)
 worst_verdict = get_worst_verdict(decisions)
@@ -122,6 +143,16 @@ with st.sidebar:
 
     st.caption(f"Source: {_src}")
     st.caption(f"Updated: {datetime.now().strftime('%d %b %Y, %H:%M')}")
+
+    # Weekly cache status
+    try:
+        from pangu_inference import count_cached_steps
+        _cached = count_cached_steps()
+        _total  = 13
+        _weekly_src = f"{_cached}/{_total} steps cached" if _cached > 0 else "No cache"
+    except Exception:
+        _weekly_src = "Mock data"
+    st.caption(f"Weekly: {_weekly_src}")
 
 # ---------------------------------------------------------------------------
 # Theme — computed from forecast conditions
@@ -401,6 +432,175 @@ st.markdown(f"""
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# 7-Day Forecast Strip + Chart
+# ---------------------------------------------------------------------------
+
+
+def _day_precip_icon(day: dict) -> str:
+    p = day["precipitation_probability"]
+    t = day["temp_min_c"]
+    if t < 2 and p > 0.4:
+        return "🌨️"
+    if p > 0.65:
+        return "🌧️"
+    if p > 0.35:
+        return "🌦️"
+    if day["wind_speed_kmh"] > 35:
+        return "💨"
+    return "☀️"
+
+
+# Build day strip cards
+_day_cells = ""
+for _day in weekly:
+    _frost_star = " ❄" if _day["frost_risk"] else ""
+    _label      = _day["date"]
+    _icon       = _day_precip_icon(_day)
+    _tmax       = _day["temp_max_c"]
+    _tmin       = _day["temp_min_c"]
+    _src_dot    = (
+        "rgba(125,211,252,0.7)" if _day.get("source") == "pangu"
+        else "rgba(251,191,36,0.55)"
+    )
+    _bar_pct    = int(_day["precipitation_probability"] * 100)
+    _day_cells += f"""
+    <div style="flex:1; min-width:80px; display:flex; flex-direction:column;
+                align-items:center; padding:10px 6px; border-radius:16px;
+                background:rgba(255,255,255,0.07);">
+      <div style="font-size:11px; font-weight:500; color:var(--text-secondary);
+                  margin-bottom:5px; white-space:nowrap;">{_label}</div>
+      <div style="font-size:28px; line-height:1; margin-bottom:6px;">{_icon}</div>
+      <div style="font-size:14px; font-weight:700; color:var(--text-primary);">{_tmax:.0f}°</div>
+      <div style="font-size:12px; color:var(--text-secondary);">{_tmin:.0f}°{_frost_star}</div>
+      <div style="width:32px; height:4px; border-radius:2px; margin-top:6px;
+                  background:rgba(255,255,255,0.15);">
+        <div style="width:{_bar_pct}%; height:4px; border-radius:2px;
+                    background:rgba(125,211,252,0.65);"></div>
+      </div>
+      <div style="width:6px; height:6px; border-radius:50%; margin-top:6px;
+                  background:{_src_dot};" title="{'Pangu-Weather' if _day.get('source')=='pangu' else 'Mock'}"></div>
+    </div>"""
+
+st.markdown(f"""
+<div class="glass-card" style="padding:16px 12px 14px;" role="region" aria-label="7-day forecast">
+  <div style="padding:0 8px 12px; font-size:11px; letter-spacing:2px;
+              text-transform:uppercase; color:var(--text-secondary); font-weight:500;
+              display:flex; justify-content:space-between; align-items:center;">
+    <span>7-Day Forecast</span>
+    <span style="font-size:10px; letter-spacing:1px; color:var(--text-secondary); opacity:0.7;">
+      🔵 Pangu-Weather &nbsp; 🟡 Mock
+    </span>
+  </div>
+  <div style="display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;">
+    {_day_cells}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Plotly 7-day chart
+_dates    = [d["date"]                       for d in weekly]
+_tmax     = [d["temp_max_c"]                 for d in weekly]
+_tmin     = [d["temp_min_c"]                 for d in weekly]
+_precip   = [d["precipitation_probability"]  for d in weekly]
+_frost_x  = [d["date"] for d in weekly if d["frost_risk"]]
+_frost_y  = [d["temp_min_c"] for d in weekly if d["frost_risk"]]
+
+_fig = go.Figure()
+
+# Temperature band fill
+_fig.add_trace(go.Scatter(
+    x=_dates + _dates[::-1],
+    y=_tmax + _tmin[::-1],
+    fill="toself",
+    fillcolor="rgba(125,211,252,0.15)",
+    line=dict(color="rgba(0,0,0,0)"),
+    hoverinfo="skip",
+    showlegend=False,
+    name="Temp band",
+))
+
+# Max temperature line
+_fig.add_trace(go.Scatter(
+    x=_dates, y=_tmax,
+    mode="lines+markers",
+    name="Max °C",
+    line=dict(color="#7dd3fc", width=2),
+    marker=dict(size=7, color="#7dd3fc"),
+    yaxis="y1",
+))
+
+# Min temperature line
+_fig.add_trace(go.Scatter(
+    x=_dates, y=_tmin,
+    mode="lines+markers",
+    name="Min °C",
+    line=dict(color="#93c5fd", width=2, dash="dot"),
+    marker=dict(size=6, color="#93c5fd"),
+    yaxis="y1",
+))
+
+# Frost star markers
+if _frost_x:
+    _fig.add_trace(go.Scatter(
+        x=_frost_x, y=_frost_y,
+        mode="markers",
+        name="Frost Risk",
+        marker=dict(symbol="star", size=14, color="#bfdbfe", line=dict(color="white", width=1)),
+        yaxis="y1",
+    ))
+
+# 0°C reference line
+_fig.add_hline(
+    y=0, line=dict(color="rgba(255,255,255,0.3)", dash="dash", width=1),
+    annotation_text="0°C", annotation_font_color="rgba(255,255,255,0.5)",
+    annotation_font_size=10,
+)
+
+# Precipitation probability bars on secondary axis
+_fig.add_trace(go.Bar(
+    x=_dates, y=_precip,
+    name="Rain prob.",
+    marker_color="rgba(125,211,252,0.35)",
+    marker_line=dict(color="rgba(125,211,252,0.5)", width=1),
+    yaxis="y2",
+    opacity=0.8,
+))
+
+_fig.update_layout(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="rgba(255,255,255,0.75)", family="DM Sans, sans-serif", size=12),
+    legend=dict(
+        orientation="h", x=0, y=1.12,
+        font=dict(size=11),
+        bgcolor="rgba(0,0,0,0)",
+    ),
+    margin=dict(l=0, r=0, t=32, b=0),
+    xaxis=dict(
+        showgrid=False,
+        tickfont=dict(color="rgba(255,255,255,0.65)", size=11),
+        linecolor="rgba(255,255,255,0.1)",
+    ),
+    yaxis=dict(
+        title=dict(text="Temperature (°C)", font=dict(size=11)),
+        tickfont=dict(color="rgba(255,255,255,0.65)", size=10),
+        gridcolor="rgba(255,255,255,0.07)",
+        zerolinecolor="rgba(255,255,255,0.15)",
+    ),
+    yaxis2=dict(
+        title="Rain probability",
+        overlaying="y", side="right",
+        range=[0, 2],
+        tickformat=".0%",
+        tickfont=dict(color="rgba(125,211,252,0.7)", size=10),
+        showgrid=False,
+    ),
+    hovermode="x unified",
+)
+
+st.plotly_chart(_fig, use_container_width=True, config={"displayModeBar": False})
 
 # ---------------------------------------------------------------------------
 # Decision Cards — 2 × 2 glass grid

@@ -14,6 +14,7 @@ Expected file layout (relative to the repo root):
 
 import math
 import os
+import random
 import warnings
 from datetime import datetime, timedelta
 
@@ -257,7 +258,7 @@ def get_forecast(
 
     try:
         _, output_surface = _load_or_run(model_path, input_dir, output_dir, force_refresh)
-    except Exception as exc:  # noqa: BLE001
+    except (FileNotFoundError, RuntimeError) as exc:
         warnings.warn(
             f"\u26a0\ufe0f Pangu-Weather inference failed ({exc}) \u2014 using mock data.",
             stacklevel=2,
@@ -317,3 +318,191 @@ def get_forecast(
         "frost_risk":               frost_risk,
         "hourly":                   hourly,
     }
+
+
+# ---------------------------------------------------------------------------
+# Weekly forecast helpers
+# ---------------------------------------------------------------------------
+
+# Raw lat/lon for each region (used for grid extraction in weekly path)
+REGION_COORDS = {
+    "East Midlands":     (52.80,  -1.20),
+    "Yorkshire":         (53.90,  -1.50),
+    "East Anglia":       (52.40,   0.90),
+    "Southwest England": (50.70,  -3.50),
+    "Wales":             (52.10,  -3.80),
+    "Scotland":          (56.50,  -4.00),
+    "Northern Ireland":  (54.60,  -6.70),
+}
+
+
+def _latlon_to_idx(lat: float, lon: float) -> tuple:
+    """Convert (lat, lon) to (lat_idx, lon_idx) on the 0.25° global grid."""
+    lon_pos = lon % 360.0
+    lat_idx = int((90.0 - lat) / 0.25)
+    lon_idx = int(lon_pos / 0.25)
+    lat_idx = max(0, min(lat_idx, 720))
+    lon_idx = max(0, min(lon_idx, 1439))
+    return lat_idx, lon_idx
+
+
+def _extract_surface_vars(output_surface: "np.ndarray", lat: float, lon: float) -> dict:
+    """
+    Extract T2M, U10, V10, MSLP from a Pangu output_surface array at a grid point
+    and return a standardised weather dict with precip heuristic.
+    """
+    lat_idx, lon_idx = _latlon_to_idx(lat, lon)
+
+    mslp = float(output_surface[0, lat_idx, lon_idx])
+    u10  = float(output_surface[1, lat_idx, lon_idx])
+    v10  = float(output_surface[2, lat_idx, lon_idx])
+    t2m  = float(output_surface[3, lat_idx, lon_idx])
+
+    temperature_c      = round(t2m - 273.15, 2)
+    wind_speed_ms      = math.sqrt(u10 ** 2 + v10 ** 2)
+    wind_speed_kmh     = round(wind_speed_ms * 3.6, 2)
+    wind_direction_deg = round((math.degrees(math.atan2(u10, v10)) + 180.0) % 360.0, 1)
+
+    mslp_factor      = float(np.clip((101325.0 - mslp) / 3000.0, 0.0, 1.0))
+    wind_dir_rad     = math.radians(wind_direction_deg)
+    westerly_factor  = float(np.clip((math.cos(wind_dir_rad - math.radians(247)) + 1.0) / 2.0, 0.0, 1.0))
+    wind_mag_factor  = float(np.clip(wind_speed_kmh / 60.0, 0.0, 1.0))
+    precip_prob      = round(float(np.clip(
+        0.5 * mslp_factor + 0.3 * westerly_factor * wind_mag_factor + 0.1, 0.0, 1.0,
+    )), 3)
+    precip_mm        = round(precip_prob * 3.0, 2)
+
+    return {
+        "temperature_c":             temperature_c,
+        "wind_speed_kmh":            wind_speed_kmh,
+        "wind_direction_deg":        wind_direction_deg,
+        "precipitation_mm":          precip_mm,
+        "precipitation_probability": precip_prob,
+        "frost_risk":                temperature_c < 2.0,
+    }
+
+
+# Day groupings: (day_offset_from_today, [step_indices])
+_DAY_GROUPS = [
+    (0, [0, 1, 2, 3]),   # Day 1: 6h,12h,18h,24h
+    (1, [4, 5, 6, 7]),   # Day 2: 30h,36h,42h,48h
+    (2, [8]),            # Day 3: 72h
+    (3, [9]),            # Day 4: 96h
+    (4, [10]),           # Day 5: 120h
+    (5, [11]),           # Day 6: 144h
+    (6, [12]),           # Day 7: 168h
+]
+
+
+def _aggregate_day(step_vars: list) -> dict:
+    """Average multiple step dicts into a single daily summary."""
+    keys = ["temperature_c", "wind_speed_kmh", "precipitation_mm", "precipitation_probability"]
+    out  = {}
+    for k in keys:
+        out[k] = round(sum(s[k] for s in step_vars) / len(step_vars), 2)
+    out["temp_min_c"]  = round(min(s["temperature_c"] for s in step_vars), 2)
+    out["temp_max_c"]  = round(max(s["temperature_c"] for s in step_vars), 2)
+    out["frost_risk"]  = any(s["frost_risk"] for s in step_vars)
+    out["wind_direction_deg"] = step_vars[-1]["wind_direction_deg"]
+    return out
+
+
+def _mock_weekly_forecast(region: str) -> list:
+    """
+    Generate 7 days of plausible mock daily summaries seeded by region name
+    so results are deterministic per region.
+    """
+    rng    = random.Random(hash(region) & 0xFFFFFFFF)
+    profile = _MOCK_PROFILES.get(region, _MOCK_PROFILES["East Midlands"])
+    base_t  = profile["temperature_c"]
+    base_w  = profile["wind_speed_kmh"]
+    base_p  = profile["precipitation_probability"]
+
+    days = []
+    today = datetime.now()
+    for d in range(7):
+        t_offset = rng.uniform(-3.0, 3.0)
+        temp_mid  = round(base_t + t_offset, 1)
+        temp_min  = round(temp_mid - rng.uniform(1.5, 4.0), 1)
+        temp_max  = round(temp_mid + rng.uniform(1.5, 4.0), 1)
+        wind      = round(base_w * rng.uniform(0.7, 1.4), 1)
+        precip_p  = round(min(1.0, max(0.0, base_p + rng.uniform(-0.2, 0.2))), 2)
+        precip_mm = round(precip_p * 3.0, 2)
+
+        days.append({
+            "day_offset":                d,
+            "date":                      (today + timedelta(days=d)).strftime("%a %d %b"),
+            "temperature_c":             temp_mid,
+            "temp_min_c":                temp_min,
+            "temp_max_c":                temp_max,
+            "wind_speed_kmh":            wind,
+            "wind_direction_deg":        round(rng.uniform(180, 320), 1),
+            "precipitation_mm":          precip_mm,
+            "precipitation_probability": precip_p,
+            "frost_risk":                temp_min < 2.0,
+            "source":                    "mock",
+        })
+    return days
+
+
+def get_weekly_forecast(
+    region: str,
+    model_6h_path:  str = "../pangu_weather_6.onnx",
+    model_24h_path: str = "../pangu_weather_24.onnx",
+    input_dir:      str = "../input_data",
+    output_dir:     str = "../output_data",
+    force_refresh:  bool = False,
+) -> list:
+    """
+    Return 7 daily weather summaries for the given region using the
+    iterative Pangu-Weather chain (8×6h + 5×24h steps).
+
+    Falls back to deterministic mock data if models or input files are absent.
+
+    Each entry in the returned list contains:
+        day_offset, date, temperature_c, temp_min_c, temp_max_c,
+        wind_speed_kmh, wind_direction_deg, precipitation_mm,
+        precipitation_probability, frost_risk, source ("pangu" or "mock")
+    """
+    try:
+        from pangu_inference import run_weekly_inference
+    except ImportError as exc:
+        warnings.warn(f"pangu_inference not available ({exc}) — using mock weekly data.", stacklevel=2)
+        return _mock_weekly_forecast(region)
+
+    try:
+        steps = run_weekly_inference(force_refresh=force_refresh)
+    except (FileNotFoundError, RuntimeError) as exc:
+        warnings.warn(f"Weekly inference unavailable ({exc}) — using mock weekly data.", stacklevel=2)
+        print(f"[FarmCast] Weekly inference unavailable: {exc} — falling back to mock data.")
+        return _mock_weekly_forecast(region)
+
+    coords = REGION_COORDS.get(region, REGION_COORDS["East Midlands"])
+    lat, lon = coords
+
+    # Map step_index → extracted vars dict
+    step_map: dict = {}
+    for s in steps:
+        step_map[s["step"]] = _extract_surface_vars(s["output_surface"], lat, lon)
+
+    today = datetime.now()
+    days  = []
+    for day_offset, step_indices in _DAY_GROUPS:
+        step_vars = [step_map[i] for i in step_indices if i in step_map]
+        if not step_vars:
+            continue
+        agg = _aggregate_day(step_vars)
+        days.append({
+            "day_offset":                day_offset,
+            "date":                      (today + timedelta(days=day_offset)).strftime("%a %d %b"),
+            "temperature_c":             agg["temperature_c"],
+            "temp_min_c":                agg["temp_min_c"],
+            "temp_max_c":                agg["temp_max_c"],
+            "wind_speed_kmh":            agg["wind_speed_kmh"],
+            "wind_direction_deg":        agg["wind_direction_deg"],
+            "precipitation_mm":          agg["precipitation_mm"],
+            "precipitation_probability": agg["precipitation_probability"],
+            "frost_risk":                agg["frost_risk"],
+            "source":                    "pangu",
+        })
+    return days

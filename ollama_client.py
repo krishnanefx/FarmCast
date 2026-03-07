@@ -75,5 +75,5 @@ def get_advisory(
         )
     except requests.exceptions.Timeout:
         return "Advisory unavailable — Ollama took too long to respond. Try again in a moment."
-    except Exception as exc:  # noqa: BLE001
-        return f"Advisory unavailable — unexpected error: {exc}"
+    except requests.exceptions.RequestException as exc:
+        return f"Advisory unavailable — unexpected network error: {exc}"
