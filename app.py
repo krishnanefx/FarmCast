@@ -3,11 +3,12 @@ app.py — FarmCast: AI weather intelligence dashboard for UK farmers.
 Run: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
 """
 
-import streamlit as st
-import plotly.graph_objects as go
+import json
+import os
 import folium
-from streamlit_folium import st_folium
+import streamlit as st
 from datetime import datetime
+from streamlit_folium import st_folium
 
 from data_loader import get_forecast
 from decision_logic import get_all_decisions, get_worst_verdict, GOOD, CAUTION, AVOID
@@ -19,13 +20,8 @@ from ollama_client import get_advisory, DEFAULT_MODEL
 OLLAMA_MODEL = "llama3.2:1b"  # Change here to switch model globally
 
 REGIONS = [
-    "East Midlands",
-    "Yorkshire",
-    "East Anglia",
-    "Southwest England",
-    "Wales",
-    "Scotland",
-    "Northern Ireland",
+    "East Midlands", "Yorkshire", "East Anglia",
+    "Southwest England", "Wales", "Scotland", "Northern Ireland",
 ]
 
 REGION_COORDS = {
@@ -38,24 +34,17 @@ REGION_COORDS = {
     "Northern Ireland":  (54.60, -6.70),
 }
 
-# Earth-tone palette
-C_GREEN_DARK  = "#2d5a27"
-C_GREEN_MID   = "#4a7c59"
-C_BROWN_DARK  = "#5c4a1e"
-C_BROWN_MID   = "#8b6914"
-C_CREAM       = "#f5f0e8"
-C_AVOID       = "#c0392b"
-C_CAUTION     = "#e6a817"
-C_GOOD        = "#2d6a2d"
+MARKER_COLOURS = {GOOD: "green", CAUTION: "orange", AVOID: "red"}
 
-VERDICT_COLOURS    = {GOOD: C_GOOD, CAUTION: C_CAUTION, AVOID: C_AVOID}
-VERDICT_LABELS     = {GOOD: "✅ Good", CAUTION: "⚠️ Caution", AVOID: "🚫 Avoid"}
-# Caution amber is light — use dark text for WCAG AA contrast (4.5:1)
-VERDICT_TEXT_COLOURS = {GOOD: "white", CAUTION: "#1a1a1a", AVOID: "white"}
-MARKER_COLOURS     = {GOOD: "green", CAUTION: "orange", AVOID: "red"}
+# Glass-card verdict colours (light, semi-transparent for dark backgrounds)
+VERDICT_GLASS = {
+    GOOD:    {"border": "#4ade80", "bg": "rgba(74,222,128,0.18)",  "text": "#4ade80", "label": "✓ Good"},
+    CAUTION: {"border": "#fbbf24", "bg": "rgba(251,191,36,0.18)",  "text": "#fbbf24", "label": "⚠ Caution"},
+    AVOID:   {"border": "#f87171", "bg": "rgba(248,113,113,0.18)", "text": "#f87171", "label": "✕ Avoid"},
+}
 
 # ---------------------------------------------------------------------------
-# Page config & CSS
+# Page config — must be first Streamlit call
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="FarmCast",
@@ -64,236 +53,358 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown(f"""
-<style>
-  /* ------------------------------------------------------------------ */
-  /* Accessibility                                                        */
-  /* ------------------------------------------------------------------ */
-  /* Skip-to-content: visible on keyboard focus only */
-  .skip-link {{
-      position: absolute; top: -48px; left: 0;
-      background: {C_GREEN_DARK}; color: white;
-      padding: 10px 18px; z-index: 9999;
-      font-size: 16px; font-weight: 600;
-      border-radius: 0 0 6px 0; text-decoration: none;
-  }}
-  .skip-link:focus {{ top: 0; outline: 3px solid #fff; }}
-
-  /* ------------------------------------------------------------------ */
-  /* Base — minimum 16px for WCAG AA                                     */
-  /* ------------------------------------------------------------------ */
-  html, body, [class*="css"] {{
-      font-size: 16px;
-      font-family: 'Segoe UI', Arial, sans-serif;
-      background-color: {C_CREAM};
-      color: #1a1a1a;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Demo banner                                                          */
-  /* ------------------------------------------------------------------ */
-  .demo-banner {{
-      background: {C_GREEN_DARK};
-      color: white;
-      text-align: center;
-      padding: 0.45rem 1rem;
-      font-size: 14px;
-      font-weight: 500;
-      border-radius: 6px;
-      margin-bottom: 0.8rem;
-      letter-spacing: 0.01em;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Header strip                                                         */
-  /* ------------------------------------------------------------------ */
-  .farmcast-header {{
-      background: linear-gradient(135deg, {C_GREEN_DARK}, {C_GREEN_MID});
-      padding: 1.4rem 2rem;
-      border-radius: 10px;
-      color: white;
-      margin-bottom: 1.2rem;
-  }}
-  .farmcast-header h1 {{
-      margin: 0; font-size: 2.4rem; font-weight: 800; color: white;
-  }}
-  .farmcast-header p {{
-      margin: 0.25rem 0 0; font-size: 1.05rem; opacity: 0.9;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Section titles                                                       */
-  /* ------------------------------------------------------------------ */
-  .section-title {{
-      font-size: 1.15rem; font-weight: 700;
-      color: {C_GREEN_DARK}; margin: 1.2rem 0 0.6rem;
-      border-left: 4px solid {C_GREEN_MID}; padding-left: 0.6rem;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Decision cards — left coloured border                               */
-  /* ------------------------------------------------------------------ */
-  .decision-card {{
-      background: white;
-      border-radius: 10px;
-      padding: 1.1rem 1.2rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.09);
-      border-left: 5px solid #ccc;
-      height: 100%;
-  }}
-  /* Pulsing animation on Avoid cards — colour + motion for accessibility */
-  @keyframes pulse {{
-      0%,  100% {{ opacity: 1;    }}
-      50%        {{ opacity: 0.65; }}
-  }}
-  .avoid-card {{ animation: pulse 2s infinite; }}
-
-  .card-icon     {{ font-size: 2rem; line-height: 1; margin-bottom: 0.3rem; }}
-  .card-activity {{ font-size: 1rem; font-weight: 600; margin: 0.2rem 0 0.35rem; }}
-  .card-reason   {{ font-size: 0.88rem; color: #444; margin: 0.3rem 0 0; line-height: 1.4; }}
-  .card-metric   {{ font-size: 0.82rem; color: #777; margin: 0.25rem 0 0; }}
-
-  /* Verdict badge — uses BOTH colour AND text+icon (never colour alone) */
-  .verdict-badge {{
-      display: inline-block;
-      padding: 0.2rem 0.65rem;
-      border-radius: 20px;
-      font-size: 0.82rem; font-weight: 700;
-      margin-bottom: 0.3rem;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Frost banner                                                         */
-  /* ------------------------------------------------------------------ */
-  .frost-banner {{
-      background: #fff3cd; border: 2px solid {C_BROWN_MID};
-      border-radius: 8px; padding: 0.85rem 1.2rem;
-      font-size: 1rem; font-weight: 600; color: {C_BROWN_DARK};
-      margin-bottom: 0.8rem;
-  }}
-
-  /* ------------------------------------------------------------------ */
-  /* Advisory box                                                         */
-  /* ------------------------------------------------------------------ */
-  .advisory-box {{
-      background: #e8f5e9; border-left: 5px solid {C_GREEN_MID};
-      border-radius: 8px; padding: 1rem 1.2rem;
-      font-size: 1rem; line-height: 1.6; color: #1b3a1b;
-  }}
-  .advisory-title {{
-      font-weight: 700; font-size: 1.05rem;
-      color: {C_GREEN_DARK}; margin-bottom: 0.4rem;
-  }}
-
-  /* Misc */
-  .updated-stamp {{ font-size: 0.82rem; color: #555; margin-top: 0.15rem; }}
-</style>
-""", unsafe_allow_html=True)
-
-# Skip-to-content link (keyboard accessibility)
-st.markdown('<a href="#main-content" class="skip-link">Skip to main content</a>',
-            unsafe_allow_html=True)
-
 # ---------------------------------------------------------------------------
-# Sidebar — controls & live status
-# ---------------------------------------------------------------------------
-with st.sidebar:
-    st.markdown("### ⚙️ FarmCast Controls")
-
-    # GPU status
-    try:
-        import onnxruntime as _ort
-        _gpu = "CUDAExecutionProvider" in _ort.get_available_providers()
-    except ImportError:
-        _gpu = False
-
-    if _gpu:
-        st.markdown(
-            '<p style="color:#2d6a2d; font-weight:700; font-size:1.05rem;">⚡ GPU Active</p>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<p style="color:#d4870a; font-weight:700; font-size:1.05rem;">💻 CPU Mode</p>',
-            unsafe_allow_html=True,
-        )
-
-    st.caption("Model: Pangu-Weather 1hr ONNX")
-    st.divider()
-
-    run_fresh = st.button("🔄 Run Fresh Forecast", use_container_width=True, type="primary")
-    st.caption("Deletes cache and re-runs inference on the DGX GPU.")
-
-# ---------------------------------------------------------------------------
-# Region selection (query params take priority)
+# Sidebar — region selector + controls (needed before forecast load)
 # ---------------------------------------------------------------------------
 params = st.query_params
 default_region = params.get("region", REGIONS[0])
 if default_region not in REGIONS:
     default_region = REGIONS[0]
 
-# ---------------------------------------------------------------------------
-# Demo banner — P7
-# ---------------------------------------------------------------------------
-st.markdown(
-    '<div class="demo-banner">'
-    "🏆 Built at the Lenovo × NVIDIA Hackathon — Pangu-Weather + Ollama running locally on a DGX"
-    " &nbsp;|&nbsp; No cloud. No API. Pure edge AI."
-    "</div>",
-    unsafe_allow_html=True,
-)
-
-# Anchor for skip-to-content
-st.markdown('<div id="main-content"></div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
-st.markdown("""
-<div class="farmcast-header" role="banner">
-  <h1>FarmCast 🌾</h1>
-  <p>Know your field before you leave the house</p>
-</div>
-""", unsafe_allow_html=True)
-
-col_sel, col_stamp = st.columns([3, 2])
-with col_sel:
+with st.sidebar:
+    st.markdown(
+        "<div style='font-size:18px; font-weight:600; color:white; margin-bottom:2px;'>🌾 FarmCast</div>"
+        "<div style='font-size:11px; letter-spacing:2px; text-transform:uppercase; "
+        "color:rgba(255,255,255,0.55); margin-bottom:18px;'>Weather Intelligence</div>",
+        unsafe_allow_html=True,
+    )
     selected_region = st.selectbox(
-        "Select region",
-        REGIONS,
+        "Region", REGIONS,
         index=REGIONS.index(default_region),
         label_visibility="collapsed",
     )
+    st.divider()
+    run_fresh = st.button("🔄 Run Fresh Forecast", use_container_width=True, type="primary")
+    st.caption("Re-runs Pangu-Weather ONNX inference on the DGX GPU.")
 
-# Sync query params
 st.query_params["region"] = selected_region
 
 # ---------------------------------------------------------------------------
-# Load forecast — fresh inference or from cache
+# Load forecast
 # ---------------------------------------------------------------------------
 if run_fresh:
     with st.spinner("Running Pangu-Weather inference on DGX GPU..."):
         forecast = get_forecast(selected_region, force_refresh=True)
-    st.success(f"✅ Inference complete — data timestamp: {forecast['forecast_time']}")
+    st.success(f"✅ Inference complete — {forecast['forecast_time']}")
 else:
     forecast = get_forecast(selected_region)
 
-decisions    = get_all_decisions(forecast)
+decisions     = get_all_decisions(forecast)
 worst_verdict = get_worst_verdict(decisions)
-worst_card   = next(d for d in decisions if d["verdict"] == worst_verdict)
+worst_card    = next(d for d in decisions if d["verdict"] == worst_verdict)
 
-with col_stamp:
+# ---------------------------------------------------------------------------
+# Sidebar — status (rendered after forecast loaded)
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.divider()
+    try:
+        import onnxruntime as _ort
+        _gpu = "CUDAExecutionProvider" in _ort.get_available_providers()
+    except ImportError:
+        _gpu = False
+
+    gpu_colour = "#4ade80" if _gpu else "#fbbf24"
+    gpu_label  = "⚡ GPU Active" if _gpu else "💻 CPU Mode"
     st.markdown(
-        f'<p class="updated-stamp">Last updated: {datetime.now().strftime("%d %b %Y, %H:%M")}</p>',
+        f'<div style="font-weight:700; color:{gpu_colour}; font-size:14px;">{gpu_label}</div>',
         unsafe_allow_html=True,
     )
-    st.caption(f"Forecast target: {forecast['forecast_time']}")
+    st.caption("Model: Pangu-Weather 1hr ONNX")
+
+    _meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "input_data", "era5_meta.json")
+    if os.path.exists(_meta_path):
+        with open(_meta_path) as _f:
+            _meta = json.load(_f)
+        _src = f"ERA5 {_meta['date']} {_meta['time']} UTC"
+    else:
+        _src = "Mock Data"
+
+    st.caption(f"Source: {_src}")
+    st.caption(f"Updated: {datetime.now().strftime('%d %b %Y, %H:%M')}")
 
 # ---------------------------------------------------------------------------
-# Section 1 — Decision Cards (2 × 2 grid)  — P3
+# Theme — computed from forecast conditions
 # ---------------------------------------------------------------------------
-st.markdown('<p class="section-title">Today\'s Activity Forecast</p>', unsafe_allow_html=True)
+if forecast["frost_risk"]:
+    _t = dict(
+        bg_top="#0f2027", bg_mid="#203a43", bg_bottom="#2c5364",
+        card_bg="rgba(200,230,255,0.12)", card_border="rgba(200,230,255,0.25)",
+        text_primary="#e8f4fd", text_secondary="rgba(200,230,255,0.7)", accent="#90caf9",
+    )
+    condition_label = "Freezing"
+elif forecast["precipitation_probability"] > 0.5:
+    _t = dict(
+        bg_top="#2c3e50", bg_mid="#3d5166", bg_bottom="#546e7a",
+        card_bg="rgba(255,255,255,0.10)", card_border="rgba(255,255,255,0.15)",
+        text_primary="#ffffff", text_secondary="rgba(255,255,255,0.7)", accent="#b0bec5",
+    )
+    condition_label = "Heavy Rain Likely" if forecast["precipitation_probability"] > 0.6 else "Showers Possible"
+else:
+    _t = dict(
+        bg_top="#1a3a5c", bg_mid="#2d6a8f", bg_bottom="#4a9abe",
+        card_bg="rgba(255,255,255,0.12)", card_border="rgba(255,255,255,0.2)",
+        text_primary="#ffffff", text_secondary="rgba(255,255,255,0.75)", accent="#7dd3fc",
+    )
+    condition_label = "Windy" if forecast["wind_speed_kmh"] > 30 else "Clear Conditions"
 
+# ---------------------------------------------------------------------------
+# CSS — full injection with theme variables + glassmorphism
+# ---------------------------------------------------------------------------
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Serif+Display&display=swap');
+
+:root {{
+  --bg-top:         {_t['bg_top']};
+  --bg-mid:         {_t['bg_mid']};
+  --bg-bottom:      {_t['bg_bottom']};
+  --card-bg:        {_t['card_bg']};
+  --card-border:    {_t['card_border']};
+  --text-primary:   {_t['text_primary']};
+  --text-secondary: {_t['text_secondary']};
+  --accent:         {_t['accent']};
+}}
+
+/* Font */
+*, *::before, *::after {{ font-family: 'DM Sans', sans-serif !important; }}
+
+/* Hide Streamlit chrome */
+#MainMenu, footer {{ visibility: hidden; }}
+header[data-testid="stHeader"] {{
+  background: transparent !important;
+  height: 0 !important;
+}}
+
+/* Full-page atmospheric gradient */
+.stApp {{
+  background: linear-gradient(
+    170deg,
+    var(--bg-top)    0%,
+    var(--bg-mid)   45%,
+    var(--bg-bottom) 100%
+  ) !important;
+  min-height: 100vh;
+}}
+
+/* Transparent scaffolding */
+.block-container {{
+  background: transparent !important;
+  padding-top: 1.2rem !important;
+  max-width: 1200px;
+}}
+[data-testid="stVerticalBlock"],
+.element-container,
+[data-testid="stHorizontalBlock"] {{
+  background: transparent !important;
+}}
+div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
+
+/* Sidebar — frosted glass */
+[data-testid="stSidebar"] {{
+  background: rgba(0,0,0,0.38) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border-right: 1px solid rgba(255,255,255,0.1) !important;
+}}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] .stCaption {{ color: rgba(255,255,255,0.8) !important; }}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {{
+  background: rgba(255,255,255,0.12) !important;
+  border: 1px solid rgba(255,255,255,0.22) !important;
+  color: white !important;
+  border-radius: 10px !important;
+}}
+[data-testid="stSidebar"] .stButton > button {{
+  border-radius: 20px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  border: 1px solid rgba(255,255,255,0.3) !important;
+  color: white !important;
+  background: rgba(255,255,255,0.12) !important;
+}}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {{
+  background: rgba(125,211,252,0.22) !important;
+  border-color: rgba(125,211,252,0.45) !important;
+}}
+[data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,0.12) !important; }}
+
+/* Frosted glass card */
+.glass-card {{
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  padding: 20px;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}}
+
+/* Horizontal hourly strip — hide scrollbar */
+.hourly-strip {{
+  overflow-x: auto;
+  display: flex;
+  gap: 0;
+  padding: 0 12px 8px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}}
+.hourly-strip::-webkit-scrollbar {{ display: none; }}
+
+/* Skip link */
+.skip-link {{
+  position: absolute; top: -48px; left: 0;
+  background: rgba(0,0,0,0.85); color: white;
+  padding: 10px 18px; z-index: 9999;
+  font-size: 16px; border-radius: 0 0 6px 0;
+  text-decoration: none;
+}}
+.skip-link:focus {{ top: 0; outline: 3px solid white; }}
+
+/* Avoid card pulse */
+@keyframes pulse {{
+  0%, 100% {{ opacity: 1;   }}
+  50%       {{ opacity: 0.6; }}
+}}
+.avoid-pulse {{ animation: pulse 2s infinite; }}
+
+/* Floating particles */
+@keyframes float {{
+  0%, 100% {{ transform: translateY(0px) rotate(0deg);   opacity: 0.25; }}
+  50%       {{ transform: translateY(-20px) rotate(180deg); opacity: 0.55; }}
+}}
+.particle {{
+  position: fixed;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.35);
+  animation: float linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}}
+
+/* Success/spinner text colour fix */
+[data-testid="stAlert"] {{ background: rgba(255,255,255,0.1) !important; border-radius: 12px !important; }}
+</style>
+""", unsafe_allow_html=True)
+
+# Floating particles
+st.markdown("""
+<div aria-hidden="true">
+  <div class="particle" style="width:4px;height:4px;left:8%;top:15%;animation-duration:12s;animation-delay:0s;"></div>
+  <div class="particle" style="width:6px;height:6px;left:20%;top:60%;animation-duration:18s;animation-delay:2s;"></div>
+  <div class="particle" style="width:3px;height:3px;left:35%;top:25%;animation-duration:10s;animation-delay:4s;"></div>
+  <div class="particle" style="width:5px;height:5px;left:55%;top:72%;animation-duration:15s;animation-delay:1s;"></div>
+  <div class="particle" style="width:4px;height:4px;left:68%;top:10%;animation-duration:20s;animation-delay:3s;"></div>
+  <div class="particle" style="width:6px;height:6px;left:78%;top:48%;animation-duration:9s;animation-delay:5s;"></div>
+  <div class="particle" style="width:3px;height:3px;left:88%;top:70%;animation-duration:14s;animation-delay:2s;"></div>
+  <div class="particle" style="width:5px;height:5px;left:45%;top:88%;animation-duration:16s;animation-delay:6s;"></div>
+</div>
+""", unsafe_allow_html=True)
+
+# Accessibility skip link
+st.markdown('<a href="#main-content" class="skip-link">Skip to main content</a>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Demo banner
+# ---------------------------------------------------------------------------
+st.markdown(
+    "<div style='text-align:center; padding:6px 20px; margin-bottom:4px; "
+    "background:rgba(0,0,0,0.22); border:1px solid rgba(255,255,255,0.12); "
+    "border-radius:30px; font-size:13px; color:rgba(255,255,255,0.75); "
+    "letter-spacing:0.03em;'>"
+    "🏆 Lenovo × NVIDIA Hackathon &nbsp;·&nbsp; "
+    "Pangu-Weather + Ollama on DGX &nbsp;·&nbsp; No cloud. No API. Pure edge AI."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div id="main-content"></div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Hero section
+# ---------------------------------------------------------------------------
+temp_c     = forecast["temperature_c"]
+wind_kmh   = forecast["wind_speed_kmh"]
+precip_pct = forecast["precipitation_probability"] * 100
+frost_tonight = "❄️ Frost Risk Tonight" if forecast["frost_risk"] else "✓ No Frost Risk"
+
+st.markdown(f"""
+<div style="text-align:center; padding:36px 20px 20px;" role="banner">
+  <div style="font-size:13px; font-weight:500; letter-spacing:3px;
+              text-transform:uppercase; color:var(--text-secondary);
+              margin-bottom:10px;">
+    🌾 FARMCAST &nbsp;·&nbsp; {selected_region.upper()}
+  </div>
+  <div style="font-family:'DM Serif Display', Georgia, serif;
+              font-size:96px; font-weight:400; color:var(--text-primary);
+              line-height:1; margin-bottom:8px;
+              text-shadow: 0 4px 40px rgba(0,0,0,0.3);">
+    {temp_c:.0f}°
+  </div>
+  <div style="font-size:22px; font-weight:300; color:var(--text-secondary);
+              margin-bottom:10px; letter-spacing:0.02em;">
+    {condition_label}
+  </div>
+  <div style="font-size:15px; color:var(--text-secondary); letter-spacing:0.01em;">
+    Wind {wind_kmh:.0f} km/h &nbsp;·&nbsp;
+    Rain {precip_pct:.0f}% &nbsp;·&nbsp;
+    {frost_tonight}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Hourly Forecast Strip
+# ---------------------------------------------------------------------------
+hourly           = forecast["hourly"]
+current_hour_str = f"{datetime.now().hour:02d}:00"
+
+
+def _hour_icon(h: dict) -> str:
+    if h["temp_c"] < 2:
+        return "🌨️"
+    if h["precip_prob"] > 0.6:
+        return "🌧️"
+    if h["precip_prob"] > 0.3:
+        return "🌦️"
+    if h["wind_kmh"] > 30:
+        return "💨"
+    hour_num = int(h["hour"].split(":")[0])
+    return "🌤️" if 12 <= hour_num <= 17 else "☀️"
+
+
+hour_cells = ""
+for h in hourly:
+    is_now = h["hour"] == current_hour_str
+    hl_bg  = "rgba(255,255,255,0.16)" if is_now else "transparent"
+    fw     = "700" if is_now else "400"
+    hour_cells += f"""
+    <div style="min-width:66px; display:flex; flex-direction:column; align-items:center;
+                padding:10px 6px; border-radius:16px; background:{hl_bg}; flex-shrink:0;">
+      <div style="font-size:12px; color:var(--text-secondary); font-weight:{fw}; margin-bottom:4px;">{h['hour']}</div>
+      <div style="font-size:26px; line-height:1; margin-bottom:6px;" aria-hidden="true">{_hour_icon(h)}</div>
+      <div style="font-size:16px; font-weight:600; color:var(--text-primary);">{h['temp_c']:.0f}°</div>
+      <div style="font-size:11px; color:var(--accent); margin-top:3px;">{h['wind_kmh']:.0f} km/h</div>
+    </div>"""
+
+st.markdown(f"""
+<div class="glass-card" style="padding:16px 0 10px;" role="region" aria-label="Hourly forecast">
+  <div style="padding:0 20px 10px; font-size:11px; letter-spacing:2px;
+              text-transform:uppercase; color:var(--text-secondary); font-weight:500;">
+    Hourly Forecast
+  </div>
+  <div class="hourly-strip">
+    {hour_cells}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Decision Cards — 2 × 2 glass grid
+# ---------------------------------------------------------------------------
 CARD_METRICS = [
     f"Wind: {forecast['wind_speed_kmh']:.0f} km/h",
     f"Precipitation: {forecast['precipitation_mm']:.1f} mm",
@@ -303,46 +414,69 @@ CARD_METRICS = [
 
 card_cols = st.columns(2)
 for idx, card in enumerate(decisions):
-    col = card_cols[idx % 2]
-    verdict      = card["verdict"]
-    badge_colour = VERDICT_COLOURS[verdict]
-    text_colour  = VERDICT_TEXT_COLOURS[verdict]
-    avoid_class  = "avoid-card" if verdict == AVOID else ""
+    col         = card_cols[idx % 2]
+    verdict     = card["verdict"]
+    vg          = VERDICT_GLASS[verdict]
+    extra_class = "avoid-pulse" if verdict == AVOID else ""
 
     with col:
         st.markdown(f"""
-        <div class="decision-card {avoid_class}"
-             style="border-left-color:{badge_colour};"
+        <div class="glass-card {extra_class}"
+             style="border-left:3px solid {vg['border']};
+                    display:flex; justify-content:space-between;
+                    align-items:center; padding:18px 20px;"
              role="region"
-             aria-label="{card['activity']} forecast: {verdict}">
-          <div class="card-icon" aria-hidden="true">{card['icon']}</div>
-          <p class="card-activity">{card['activity']}</p>
-          <span class="verdict-badge"
-                style="background:{badge_colour}; color:{text_colour};"
-                role="status"
-                aria-label="Verdict: {verdict}">{VERDICT_LABELS[verdict]}</span>
-          <p class="card-reason">{card['reason']}</p>
-          <p class="card-metric">{CARD_METRICS[idx]}</p>
+             aria-label="{card['activity']} — {verdict}">
+          <div style="flex:1; min-width:0; padding-right:12px;">
+            <div style="font-size:11px; letter-spacing:2px; text-transform:uppercase;
+                        color:var(--text-secondary); margin-bottom:5px;">
+              {card['icon']} &nbsp;{card['activity']}
+            </div>
+            <div style="font-size:14px; color:var(--text-primary); line-height:1.45;">
+              {card['reason']}
+            </div>
+            <div style="font-size:12px; color:var(--text-secondary); margin-top:5px;">
+              {CARD_METRICS[idx]}
+            </div>
+          </div>
+          <div style="flex-shrink:0;">
+            <span style="font-size:13px; font-weight:600; padding:6px 14px;
+                         border-radius:20px; background:{vg['bg']};
+                         color:{vg['text']}; white-space:nowrap;
+                         border:1px solid {vg['border']}44;"
+                  role="status" aria-label="Verdict: {verdict}">
+              {vg['label']}
+            </span>
+          </div>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown("<div style='margin-bottom:0.7rem;'></div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Section 2 — Frost Risk Alert
+# Frost Alert
 # ---------------------------------------------------------------------------
 if forecast["frost_risk"]:
-    st.markdown(
-        '<div class="frost-banner" role="alert">'
-        "⚠️ Frost Risk Tonight — Protect vulnerable crops and bring in livestock before dusk."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,rgba(147,197,253,0.18),rgba(96,165,250,0.08));
+                border:1px solid rgba(147,197,253,0.38);
+                border-radius:16px; padding:16px 20px;
+                display:flex; align-items:center; gap:14px;
+                margin-bottom:16px;" role="alert">
+      <div style="font-size:32px; flex-shrink:0;" aria-hidden="true">🌨️</div>
+      <div>
+        <div style="font-size:14px; font-weight:600; color:#93c5fd; margin-bottom:3px;">
+          Frost Risk Tonight
+        </div>
+        <div style="font-size:13px; color:rgba(255,255,255,0.72); line-height:1.5;">
+          Protect vulnerable crops and bring in livestock before dusk.
+          Temperature dropping to {forecast['temperature_c']:.1f}°C.
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Section 3 — Ollama LLM Advisory  — P1
+# Ollama Advisory
 # ---------------------------------------------------------------------------
-st.markdown('<p class="section-title">AI Evening Advisory</p>', unsafe_allow_html=True)
-
 with st.spinner("Generating advisory…"):
     advisory_text = get_advisory(
         forecast,
@@ -352,179 +486,31 @@ with st.spinner("Generating advisory…"):
     )
 
 st.markdown(f"""
-<div class="advisory-box" role="complementary" aria-label="AI evening advisory">
-  <p class="advisory-title">📋 Your Evening Advisory</p>
-  <p>{advisory_text}</p>
+<div class="glass-card" role="complementary" aria-label="AI evening advisory">
+  <div style="font-size:11px; letter-spacing:2px; text-transform:uppercase;
+              color:var(--text-secondary); margin-bottom:14px; font-weight:500;">
+    🤖 AI Evening Advisory
+  </div>
+  <div style="font-size:16px; line-height:1.75; color:var(--text-primary);
+              font-style:italic;">
+    "{advisory_text}"
+  </div>
+  <div style="font-size:11px; color:var(--text-secondary); margin-top:12px; text-align:right;">
+    Powered by Ollama &nbsp;·&nbsp; {OLLAMA_MODEL}
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Section 4 — Hourly Chart  — P4
+# UK Map — dark_matter tiles
 # ---------------------------------------------------------------------------
 st.markdown(
-    f'<p class="section-title">Today\'s Conditions — {selected_region}</p>',
+    "<div style='font-size:11px; letter-spacing:2px; text-transform:uppercase; "
+    "color:var(--text-secondary); font-weight:500; margin-bottom:6px;'>"
+    "📍 Regional Overview</div>",
     unsafe_allow_html=True,
 )
-
-hourly      = forecast["hourly"]
-hours       = [h["hour"]        for h in hourly]
-temps       = [h["temp_c"]      for h in hourly]
-winds       = [h["wind_kmh"]    for h in hourly]
-precip_prob = [h["precip_prob"] for h in hourly]
-
-
-def _precip_bar_color(prob: float) -> str:
-    """Light blue (low) → dark blue (high) gradient."""
-    r = int(173 + (31  - 173) * prob)
-    g = int(216 + (119 - 216) * prob)
-    b = int(230 + (180 - 230) * prob)
-    a = round(0.35 + 0.45 * prob, 2)
-    return f"rgba({r},{g},{b},{a})"
-
-
-fig = go.Figure()
-
-# Precipitation — gradient bars (behind the lines)
-fig.add_trace(go.Bar(
-    x=hours,
-    y=[p * 100 for p in precip_prob],
-    name="Precip Probability (%)",
-    marker_color=[_precip_bar_color(p) for p in precip_prob],
-    yaxis="y3",
-    hovertemplate="%{y:.0f}%<extra>Precip Prob</extra>",
-))
-
-# Temperature — left axis
-fig.add_trace(go.Scatter(
-    x=hours, y=temps,
-    name="Temperature (°C)",
-    line=dict(color=C_GREEN_MID, width=2.5),
-    mode="lines+markers",
-    marker=dict(size=5),
-    yaxis="y1",
-    hovertemplate="%{y:.1f}°C<extra>Temperature</extra>",
-))
-
-# Wind speed — right axis
-fig.add_trace(go.Scatter(
-    x=hours, y=winds,
-    name="Wind Speed (km/h)",
-    line=dict(color=C_BROWN_MID, width=2.5, dash="dash"),
-    mode="lines+markers",
-    marker=dict(size=5),
-    yaxis="y2",
-    hovertemplate="%{y:.1f} km/h<extra>Wind Speed</extra>",
-))
-
-# --- Shapes & annotations ---
-shapes      = []
-annotations = []
-
-# Vertical "Now" line
-current_hour_str = f"{datetime.now().hour:02d}:00"
-if current_hour_str in hours:
-    shapes.append(dict(
-        type="line",
-        x0=current_hour_str, x1=current_hour_str,
-        y0=0, y1=1, xref="x", yref="paper",
-        line=dict(color="#666", width=1.5, dash="dot"),
-    ))
-    annotations.append(dict(
-        x=current_hour_str, y=1.03, xref="x", yref="paper",
-        text="Now", showarrow=False,
-        font=dict(size=11, color="#555"),
-        yanchor="bottom",
-    ))
-
-# Frost threshold — 0°C on temperature axis
-shapes.append(dict(
-    type="line",
-    x0=hours[0], x1=hours[-1], y0=0, y1=0,
-    xref="x", yref="y",
-    line=dict(color=C_AVOID, width=1.5, dash="dash"),
-))
-annotations.append(dict(
-    x=hours[-1], y=0, xref="x", yref="y",
-    text="Frost threshold", showarrow=False,
-    font=dict(size=10, color=C_AVOID),
-    xanchor="right", yanchor="bottom",
-))
-
-# Spray threshold — 15 km/h on wind axis
-shapes.append(dict(
-    type="line",
-    x0=hours[0], x1=hours[-1], y0=15, y1=15,
-    xref="x", yref="y2",
-    line=dict(color=C_AVOID, width=1.5, dash="dash"),
-))
-annotations.append(dict(
-    x=hours[0], y=15, xref="x", yref="y2",
-    text="Spray threshold", showarrow=False,
-    font=dict(size=10, color=C_AVOID),
-    xanchor="left", yanchor="bottom",
-))
-
-fig.update_layout(
-    paper_bgcolor=C_CREAM,
-    plot_bgcolor="#faf6ee",
-    font=dict(color="#1a1a1a", size=13),
-    title=dict(
-        text=f"Today's Conditions — {selected_region}",
-        font=dict(size=16, color=C_GREEN_DARK),
-    ),
-    height=400,
-    xaxis=dict(
-        title="Hour",
-        gridcolor="#e0dbd0",
-        linecolor="#b0a898",
-        tickfont=dict(size=12),
-    ),
-    yaxis=dict(
-        title=dict(text="Temperature (°C)", font=dict(color=C_GREEN_MID)),
-        tickfont=dict(color=C_GREEN_MID, size=12),
-        gridcolor="#e0dbd0",
-        zeroline=False,
-    ),
-    yaxis2=dict(
-        title=dict(text="Wind Speed (km/h)", font=dict(color=C_BROWN_MID)),
-        tickfont=dict(color=C_BROWN_MID, size=12),
-        overlaying="y",
-        side="right",
-        gridcolor="rgba(0,0,0,0)",
-        zeroline=False,
-    ),
-    yaxis3=dict(
-        title=dict(text="Precip Prob (%)", font=dict(color="rgba(31,119,180,0.7)")),
-        tickfont=dict(color="rgba(31,119,180,0.7)", size=11),
-        overlaying="y",
-        side="right",
-        position=1.0,
-        range=[0, 200],
-        gridcolor="rgba(0,0,0,0)",
-        zeroline=False,
-        showgrid=False,
-    ),
-    legend=dict(
-        orientation="h",
-        yanchor="bottom", y=1.02,
-        xanchor="right",  x=1,
-        bgcolor="rgba(245,240,232,0.8)",
-        bordercolor="#c0b898",
-        borderwidth=1,
-    ),
-    margin=dict(l=60, r=80, t=60, b=50),
-    hovermode="x unified",
-    shapes=shapes,
-    annotations=annotations,
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# ---------------------------------------------------------------------------
-# Section 5 — UK Map
-# ---------------------------------------------------------------------------
-st.markdown('<p class="section-title">Regional Overview Map</p>', unsafe_allow_html=True)
-st.caption("Click a region marker to switch the dashboard to that region.")
+st.caption("Click a region marker to switch the dashboard.")
 
 
 @st.cache_data(ttl=300)
@@ -539,12 +525,12 @@ def _all_region_verdicts() -> dict:
 
 region_verdicts = _all_region_verdicts()
 
-uk_map = folium.Map(location=[54.5, -3.5], zoom_start=6, tiles="CartoDB positron")
+uk_map = folium.Map(location=[54.5, -3.5], zoom_start=6, tiles="CartoDB dark_matter")
 
 for reg, coords in REGION_COORDS.items():
-    worst        = region_verdicts[reg]
+    worst         = region_verdicts[reg]
     marker_colour = MARKER_COLOURS[worst]
-    is_active    = reg == selected_region
+    is_active     = reg == selected_region
 
     folium.Marker(
         location=coords,
@@ -571,11 +557,11 @@ if map_result and map_result.get("last_object_clicked_tooltip"):
 # ---------------------------------------------------------------------------
 # Footer
 # ---------------------------------------------------------------------------
-st.markdown("<hr style='border-color:#c8bfa8; margin-top:2rem;'>", unsafe_allow_html=True)
 st.markdown(
-    f"<p style='text-align:center; font-size:0.82rem; color:#888;'>"
-    f"FarmCast — Lenovo × NVIDIA Hackathon &nbsp;|&nbsp; "
-    f"Powered by Pangu-Weather &amp; Ollama ({OLLAMA_MODEL})"
-    f"</p>",
+    "<div style='text-align:center; padding:24px 0 16px; "
+    "font-size:12px; color:var(--text-secondary); letter-spacing:0.03em;'>"
+    f"FarmCast &nbsp;·&nbsp; Lenovo × NVIDIA Hackathon &nbsp;·&nbsp; "
+    f"Pangu-Weather + Ollama ({OLLAMA_MODEL})"
+    "</div>",
     unsafe_allow_html=True,
 )
