@@ -5,6 +5,7 @@ streamlit-folium
 requests
 numpy
 python-dateutil
+timezonefinder
 onnxruntime-gpu
 # CPU-only alternative (no CUDA toolkit required):
 # onnxruntime

@@ -11,8 +11,21 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 from branca.element import Element
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from streamlit_folium import st_folium
+from zoneinfo import ZoneInfo
+
+try:
+    from geopy.geocoders import Nominatim as _Nominatim
+    _geolocator = _Nominatim(user_agent="farmcast-ai-dashboard")
+except Exception:
+    _geolocator = None
+
+try:
+    from timezonefinder import TimezoneFinder as _TZFinder
+    _tz_finder = _TZFinder()
+except Exception:
+    _tz_finder = None
 
 from data_loader import get_forecast, get_weekly_forecast
 from decision_logic import get_all_decisions, get_worst_verdict, GOOD, CAUTION, AVOID
@@ -38,30 +51,42 @@ REGION_COORDS = {
     "Northern Ireland":  (54.60, -6.70),
 }
 
-MARKER_COLOURS = {GOOD: "green", CAUTION: "orange", AVOID: "red"}
-
-# Glass-card verdict colours (light, semi-transparent for dark backgrounds)
-VERDICT_GLASS = {
-    GOOD: {
-        "border": "#4ade80",
-        "bg": "rgba(20,83,45,0.32)",
-        "text": "#bbf7d0",
-        "icon": "✓",
-        "label": "Good",
+COLOR_VISION_PROFILES = {
+    "Standard (Default)": {
+        "verdict_glass": {
+            GOOD: {"border": "#4ade80", "bg": "rgba(20,83,45,0.32)", "text": "#bbf7d0", "icon": "✓", "label": "Good"},
+            CAUTION: {"border": "#fcd34d", "bg": "rgba(146,64,14,0.32)", "text": "#fde68a", "icon": "⚠", "label": "Caution"},
+            AVOID: {"border": "#fca5a5", "bg": "rgba(127,29,29,0.34)", "text": "#fecaca", "icon": "✕", "label": "Avoid"},
+        },
+        "marker_colours": {GOOD: "green", CAUTION: "orange", AVOID: "red"},
+        "rain_colours": {"low": "#4ade80", "mid": "#fbbf24", "high": "#f87171"},
     },
-    CAUTION: {
-        "border": "#fcd34d",
-        "bg": "rgba(146,64,14,0.32)",
-        "text": "#fde68a",
-        "icon": "⚠",
-        "label": "Caution",
+    "Red-Green Blind (Protanopia)": {
+        "verdict_glass": {
+            GOOD: {"border": "#93c5fd", "bg": "rgba(30,64,175,0.30)", "text": "#dbeafe", "icon": "◆", "label": "Good"},
+            CAUTION: {"border": "#d1d5db", "bg": "rgba(75,85,99,0.32)", "text": "#f3f4f6", "icon": "▲", "label": "Caution"},
+            AVOID: {"border": "#fdba74", "bg": "rgba(154,52,18,0.34)", "text": "#ffedd5", "icon": "■", "label": "Avoid"},
+        },
+        "marker_colours": {GOOD: "blue", CAUTION: "lightgray", AVOID: "orange"},
+        "rain_colours": {"low": "#60a5fa", "mid": "#d1d5db", "high": "#fb923c"},
     },
-    AVOID: {
-        "border": "#fca5a5",
-        "bg": "rgba(127,29,29,0.34)",
-        "text": "#fecaca",
-        "icon": "✕",
-        "label": "Avoid",
+    "Blue-Yellow Blind (Tritanopia)": {
+        "verdict_glass": {
+            GOOD: {"border": "#67e8f9", "bg": "rgba(8,145,178,0.30)", "text": "#cffafe", "icon": "●", "label": "Good"},
+            CAUTION: {"border": "#c4b5fd", "bg": "rgba(109,40,217,0.30)", "text": "#ede9fe", "icon": "◆", "label": "Caution"},
+            AVOID: {"border": "#fca5a5", "bg": "rgba(153,27,27,0.35)", "text": "#fee2e2", "icon": "✕", "label": "Avoid"},
+        },
+        "marker_colours": {GOOD: "cadetblue", CAUTION: "purple", AVOID: "darkred"},
+        "rain_colours": {"low": "#06b6d4", "mid": "#8b5cf6", "high": "#ef4444"},
+    },
+    "Monochrome (High Contrast)": {
+        "verdict_glass": {
+            GOOD: {"border": "#e5e7eb", "bg": "rgba(31,41,55,0.40)", "text": "#f9fafb", "icon": "✅", "label": "Good"},
+            CAUTION: {"border": "#9ca3af", "bg": "rgba(55,65,81,0.42)", "text": "#f3f4f6", "icon": "⚠", "label": "Caution"},
+            AVOID: {"border": "#ffffff", "bg": "rgba(17,24,39,0.55)", "text": "#ffffff", "icon": "❌", "label": "Avoid"},
+        },
+        "marker_colours": {GOOD: "white", CAUTION: "gray", AVOID: "black"},
+        "rain_colours": {"low": "#d1d5db", "mid": "#9ca3af", "high": "#111827"},
     },
 }
 
@@ -78,77 +103,71 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 # Sidebar — region selector + controls (needed before forecast load)
 # ---------------------------------------------------------------------------
-from geopy.geocoders import Nominatim
-geolocator = Nominatim(user_agent="farmcast-ai-dashboard")
-
 params = st.query_params
 default_region = params.get("region", REGIONS[0])
 if default_region not in REGIONS:
     default_region = REGIONS[0]
 
-with st.sidebar:
-    st.markdown(
-        "<div style='font-size:18px; font-weight:600; color:white; margin-bottom:2px;'>🌾 FarmCast</div>"
-        "<div style='font-size:11px; letter-spacing:2px; text-transform:uppercase; "
-        "color:rgba(255,255,255,0.55); margin-bottom:18px;'>Weather Intelligence</div>",
-        unsafe_allow_html=True,
-    )
-    
-    st.markdown("<div style='font-size:13px; font-weight:600; color:white; margin-bottom:4px;'>Search Location</div>", unsafe_allow_html=True)
-    search_loc = st.text_input(
-        "Search location",
-        placeholder="Search globally...",
-        label_visibility="collapsed",
-        help="Enter a city and country, for example Singapore, SG.",
-    )
-    st.caption("Location input: city and country improves geocoding accuracy.")
-    
-    st.markdown("<div style='font-size:13px; font-weight:600; color:white; margin-top:8px; margin-bottom:4px;'>Or Select UK Region</div>", unsafe_allow_html=True)
-    selected_region = st.selectbox(
-        "Region", REGIONS,
-        index=REGIONS.index(default_region),
-        label_visibility="collapsed",
-    )
-    
-    st.markdown("<div style='font-size:13px; font-weight:600; color:white; margin-top:8px; margin-bottom:4px;'>Forecast Window</div>", unsafe_allow_html=True)
-    model_hours = int(st.selectbox(
-        "Forecast Horizon", ["1", "3", "6", "24"],
-        index=3, # Default 24h as per Yubo preference
-        label_visibility="collapsed",
-        help="Select model lead time in hours.",
-    ))
-    st.caption("Forecast window: choose 1, 3, 6, or 24 hours ahead.")
-
-    st.markdown("<div style='font-size:13px; font-weight:600; color:white; margin-top:10px; margin-bottom:4px;'>Accessibility</div>", unsafe_allow_html=True)
-    font_size_px = st.slider("Text size", min_value=14, max_value=24, value=16, step=1)
-    high_contrast = st.checkbox("High contrast text", value=False)
-    reduce_motion = st.checkbox("Reduce motion", value=False)
-    enable_tts = st.checkbox("Show text-to-speech controls", value=True)
-    
-    st.divider()
-    run_fresh = st.button("🔄 Refresh All Forecasts", use_container_width=True, type="primary")
-    st.caption("Re-runs Pangu-Weather ONNX inference on the DGX GPU.")
-    st.caption("📅 7-day forecast temporarily disabled.")
-
-st.query_params["region"] = selected_region
-
-# Geocode resolution if search term exists
 custom_lat = None
 custom_lon = None
-resolved_location_name = selected_region
 
-if search_loc.strip():
-    with st.spinner(f"Geocoding {search_loc}..."):
-        try:
-            loc_data = geolocator.geocode(search_loc)
-            if loc_data:
-                custom_lat = loc_data.latitude
-                custom_lon = loc_data.longitude
-                resolved_location_name = loc_data.address.split(',')[0] # Grab just the city/main name
-            else:
-                st.sidebar.error("Location not found.")
-        except Exception as e:
-            st.sidebar.error("Geocoding failed.")
+with st.sidebar:
+    st.markdown(
+        "<div style='font-size:18px; font-weight:700; color:white; margin-bottom:2px;'>🌾 FarmCast</div>"
+        "<div style='font-size:11px; letter-spacing:2px; text-transform:uppercase; "
+        "color:rgba(255,255,255,0.55); margin-bottom:16px;'>Weather Intelligence</div>",
+        unsafe_allow_html=True,
+    )
+
+    selected_region = st.selectbox("Region", REGIONS, index=REGIONS.index(default_region))
+
+    if _geolocator is not None:
+        search_loc = st.text_input(
+            "Search location",
+            placeholder="e.g. Edinburgh, UK",
+            help="Overrides the region selector above.",
+        )
+        if search_loc.strip():
+            with st.spinner("Geocoding…"):
+                try:
+                    _loc = _geolocator.geocode(search_loc)
+                    if _loc:
+                        custom_lat = _loc.latitude
+                        custom_lon = _loc.longitude
+                        st.caption(f"Found: {_loc.address.split(',')[0]}")
+                    else:
+                        st.caption("Location not found — using region centre.")
+                except Exception:
+                    st.caption("Geocoding unavailable.")
+
+    _col_w, _col_u = st.columns(2)
+    with _col_w:
+        model_hours = int(st.selectbox(
+            "Window (h)", ["1", "6", "24"],
+            index=0,
+            help="Pangu-Weather model lead time.",
+        ))
+    with _col_u:
+        unit_system = st.selectbox("Units", ["Metric", "Imperial"], index=0)
+
+    st.markdown("<div class='sb-section'>Accessibility</div>", unsafe_allow_html=True)
+    font_size_px = st.slider("Text size (px)", min_value=14, max_value=24, value=16, step=1)
+    color_vision_mode = st.selectbox(
+        "Color vision mode",
+        list(COLOR_VISION_PROFILES.keys()),
+        index=0,
+        help="Applies colorblind-safe palettes and distinct symbols for status.",
+    )
+    high_contrast = st.checkbox("High contrast", value=False)
+    reduce_motion = st.checkbox("Reduce motion", value=False)
+    enable_tts = st.checkbox("Show text-to-speech controls", value=True)
+
+    st.divider()
+    run_fresh = st.button("🔄 Refresh All Forecasts", use_container_width=True, type="primary")
+    st.caption("Re-runs Pangu-Weather ONNX inference.\n📅 7-day: Days 1–2 via 6h model, Days 3–7 via 24h model.")
+
+st.query_params["region"] = selected_region
+resolved_location_name = selected_region
 
 # ---------------------------------------------------------------------------
 # Load forecast
@@ -199,58 +218,147 @@ worst_verdict = get_worst_verdict(decisions)
 worst_card    = next(d for d in decisions if d["verdict"] == worst_verdict)
 
 # ---------------------------------------------------------------------------
+# Unit formatting (display only; model logic remains metric)
+# ---------------------------------------------------------------------------
+is_imperial = unit_system == "Imperial"
+
+
+def _temp_to_display(temp_c: float) -> float:
+    return (temp_c * 9.0 / 5.0 + 32.0) if is_imperial else temp_c
+
+
+def _wind_to_display(wind_kmh: float) -> float:
+    return (wind_kmh * 0.621371) if is_imperial else wind_kmh
+
+
+def _precip_to_display(precip_mm: float) -> float:
+    return (precip_mm / 25.4) if is_imperial else precip_mm
+
+
+def _format_temp(temp_c: float, decimals: int = 1) -> str:
+    unit = "°F" if is_imperial else "°C"
+    return f"{_temp_to_display(temp_c):.{decimals}f}{unit}"
+
+
+def _format_wind(wind_kmh: float, decimals: int = 0) -> str:
+    unit = "mph" if is_imperial else "km/h"
+    return f"{_wind_to_display(wind_kmh):.{decimals}f} {unit}"
+
+
+def _format_precip(precip_mm: float, decimals: int = 1) -> str:
+    if is_imperial:
+        return f"{_precip_to_display(precip_mm):.{max(2, decimals)}f} in"
+    return f"{precip_mm:.{decimals}f} mm"
+
+
+def _wind_dir_compass(deg: float) -> str:
+    points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+              "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = int(((deg % 360.0) + 11.25) // 22.5) % 16
+    return points[idx]
+
+
+def _format_wind_dir(deg: float) -> str:
+    return f"🧭 {_wind_dir_compass(deg)} ({deg:.0f}°)"
+
+
+def _parse_hour(hour_label: str) -> int:
+    try:
+        return int(str(hour_label).split(":")[0])
+    except Exception:
+        return -1
+
+
+def _resolve_location_now(lat: float, lon: float) -> tuple:
+    tz_name = None
+    local_now = None
+
+    if _tz_finder is not None:
+        try:
+            tz_name = _tz_finder.timezone_at(lat=lat, lng=lon)
+        except Exception:
+            tz_name = None
+
+    if tz_name:
+        try:
+            local_now = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            local_now = None
+
+    if local_now is None:
+        approx_offset = int(round(lon / 15.0))
+        local_now = datetime.now(timezone.utc) + timedelta(hours=approx_offset)
+        if not tz_name:
+            tz_name = f"UTC{approx_offset:+d}"
+
+    return local_now, tz_name
+
+
+_loc_lat = custom_lat if custom_lat is not None else REGION_COORDS.get(selected_region, (52.8, -1.2))[0]
+_loc_lon = custom_lon if custom_lon is not None else REGION_COORDS.get(selected_region, (52.8, -1.2))[1]
+_local_now, _local_tz_label = _resolve_location_now(_loc_lat, _loc_lon)
+current_hour = _local_now.hour
+current_hour_str = f"{current_hour:02d}:00"
+
+_hourly_raw = forecast.get("hourly", [])
+_hourly_by_hour = {}
+for _h in _hourly_raw:
+    _hour_num = _parse_hour(_h.get("hour", ""))
+    if 0 <= _hour_num <= 23:
+        _hourly_by_hour[_hour_num] = _h
+
+# Rolling 24h window from local current hour.
+rolling_hourly = []
+for _offset in range(24):
+    _target_hour = (current_hour + _offset) % 24
+    _entry = _hourly_by_hour.get(_target_hour)
+    if _entry:
+        rolling_hourly.append({
+            **_entry,
+            "hour": f"{_target_hour:02d}:00",
+            "next_day": (_offset + current_hour) >= 24,
+        })
+
+visible_hourly = rolling_hourly if rolling_hourly else _hourly_raw
+if not visible_hourly:
+    visible_hourly = []
+
+# ---------------------------------------------------------------------------
 # Sidebar — status (rendered after forecast loaded)
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.divider()
     try:
         import onnxruntime as _ort
-        _providers = _ort.get_available_providers()
-        _gpu = "CUDAExecutionProvider" in _providers
+        _gpu = "CUDAExecutionProvider" in _ort.get_available_providers()
     except ImportError:
         _gpu = False
 
     gpu_colour = "#4ade80" if _gpu else "#fbbf24"
-    gpu_label  = "⚡ AI Accelerator Active" if _gpu else "💻 CPU Inference Mode"
-    
+    gpu_label  = "⚡ GPU Active" if _gpu else "💻 CPU Mode"
+
     _meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "input_data", "era5_meta.json")
     if os.path.exists(_meta_path):
         with open(_meta_path) as _f:
             _meta = json.load(_f)
         _src = f"ERA5 {_meta['date']} {_meta['time']} UTC"
     else:
-        _src = "Mock Data Fallback"
+        _src = "Mock data"
 
-    # Weekly cache status
     try:
         from pangu_inference import count_cached_steps
         _cached = count_cached_steps()
-        _total  = 13
-        _weekly_src = f"{_cached}/{_total} cached" if _cached > 0 else "0/13 steps cached"
+        _weekly_src = f"{_cached}/13 steps cached" if _cached else "No cache"
     except Exception:
-        _weekly_src = "Mock Data"
+        _weekly_src = "Mock data"
 
-    st.markdown(f"""
-<div style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:16px; margin-top:20px;">
-  <div style="font-size:11px; letter-spacing:2px; text-transform:uppercase; color:rgba(255,255,255,0.5); font-weight:600; margin-bottom:12px;">System Status</div>
-  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
-    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Compute Engine</span>
-    <span style="font-size:12px; font-weight:700; color:{gpu_colour};">{gpu_label}</span>
-  </div>
-  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
-    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Loaded Model</span>
-    <span style="font-size:12px; color:white; font-weight:500;">Pangu-Weather {model_hours}h</span>
-  </div>
-  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
-    <span style="font-size:12px; color:rgba(255,255,255,0.7);">7-Day Cache</span>
-    <span style="font-size:12px; color:white; font-weight:500;">{_weekly_src}</span>
-  </div>
-  <div style="display:flex; justify-content:space-between; padding-bottom:4px;">
-    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Data Source</span>
-    <span style="font-size:12px; color:white; font-weight:500;">{_src}</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-weight:700; color:{gpu_colour}; font-size:13px; margin-bottom:2px;">{gpu_label}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Model: Pangu-Weather {model_hours}h ONNX")
+    st.caption(f"Source: {_src}")
+    st.caption(f"Weekly: {_weekly_src}")
+    st.caption(f"Updated: {datetime.now().strftime('%d %b %Y, %H:%M')}")
 
 # ---------------------------------------------------------------------------
 # Theme — computed from forecast conditions
@@ -288,6 +396,11 @@ pulse_animation = "none" if reduce_motion else "pulse 2s infinite"
 particle_animation = "none" if reduce_motion else "float linear infinite"
 particle_display = "none" if reduce_motion else "block"
 
+_vision_profile = COLOR_VISION_PROFILES.get(color_vision_mode, COLOR_VISION_PROFILES["Standard (Default)"])
+active_verdict_glass = _vision_profile["verdict_glass"]
+active_marker_colours = _vision_profile["marker_colours"]
+active_rain_colours = _vision_profile["rain_colours"]
+
 # ---------------------------------------------------------------------------
 # CSS — full injection with theme variables + glassmorphism
 # ---------------------------------------------------------------------------
@@ -306,9 +419,45 @@ st.markdown(f"""
   --accent:         {_t['accent']};
 }}
 
-/* Font */
-*, *::before, *::after {{ font-family: 'DM Sans', sans-serif !important; }}
+/* Font — applied broadly but NOT with !important so icon fonts can override */
+*, *::before, *::after {{ font-family: 'DM Sans', sans-serif; }}
+/* Re-apply with !important only to text-bearing elements */
+body, p, h1, h2, h3, h4, h5, h6, label, button, input, select, textarea,
+[data-testid="stMarkdownContainer"], [data-testid="stSidebar"],
+.block-container {{ font-family: 'DM Sans', sans-serif !important; }}
 html, body, [class*="st-"] {{ font-size: {font_size_px}px !important; }}
+
+/* Sidebar dropdowns — selected value text always visible and correctly sized */
+[data-testid="stSidebar"] [data-baseweb="select"] div,
+[data-testid="stSidebar"] [data-baseweb="select"] input {{
+  color: white !important;
+}}
+[data-testid="stSidebar"] [data-baseweb="select"] span:not([class*="material"]) {{
+  color: white !important;
+  font-size: 13px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}}
+
+/* Restore Material icon fonts — span-qualified selector beats the broad rules above */
+span.material-icons,
+span.material-icons-round,
+span.material-icons-outlined,
+span.material-symbols-outlined,
+span.material-symbols-rounded,
+i.material-icons,
+i.material-icons-round {{
+  font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+  font-style: normal !important;
+  font-weight: normal !important;
+  line-height: 1 !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  display: inline-block !important;
+  white-space: nowrap !important;
+  direction: ltr !important;
+}}
 
 /* Screen-reader only utility */
 .sr-only {{
@@ -368,13 +517,21 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
 [data-testid="stSidebar"] .stCaption {{ color: rgba(255,255,255,0.8) !important; }}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {{
   background: rgba(255,255,255,0.08) !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  color: white !important;
+  border: 1px solid rgba(255,255,255,0.18) !important;
   border-radius: 12px !important;
   transition: border-color 0.2s;
 }}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div:hover {{
-  border-color: rgba(255,255,255,0.3) !important;
+  border-color: rgba(255,255,255,0.4) !important;
+}}
+/* Force ALL text inside every selectbox control to white */
+[data-testid="stSidebar"] [data-baseweb="select"] * {{
+  color: white !important;
+}}
+/* Restore icon arrow to slightly dimmed white (not pure) */
+[data-testid="stSidebar"] [data-baseweb="select"] span.material-symbols-rounded {{
+  color: rgba(255,255,255,0.6) !important;
+  font-size: 20px !important;
 }}
 [data-testid="stSidebar"] .stButton > button {{
   border-radius: 12px !important;
@@ -389,17 +546,58 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
   border-color: rgba(125,211,252,0.45) !important;
 }}
 [data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,0.12) !important; }}
+[data-testid="stSidebar"] .sb-section {{
+  font-size: 11px;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.62);
+  font-weight: 700;
+  margin: 8px 0 4px;
+}}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {{
+  margin-bottom: 0.25rem !important;
+}}
+[data-testid="stSidebar"] .stTextInput,
+[data-testid="stSidebar"] .stSelectbox,
+[data-testid="stSidebar"] .stCheckbox {{
+  margin-bottom: 0.65rem !important;
+}}
+[data-testid="stSidebar"] .stSlider {{
+  margin-bottom: 1.4rem !important;
+  padding-bottom: 0.5rem !important;
+}}
+[data-testid="stSidebar"] details {{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  border-radius: 12px !important;
+  padding: 8px 12px 14px !important;
+  margin-bottom: 0.65rem !important;
+}}
+[data-testid="stSidebar"] details summary {{
+  color: rgba(255,255,255,0.9) !important;
+  font-weight: 600 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding-bottom: 4px !important;
+}}
 
 /* Minimum 44px touch targets in sidebar */
 [data-testid="stSidebar"] .stButton > button,
 [data-testid="stSidebar"] [data-testid="stTextInput"] input,
 [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div,
-[data-testid="stSidebar"] [data-baseweb="select"] > div,
-[data-testid="stSidebar"] [role="slider"] {{
+[data-testid="stSidebar"] [data-baseweb="select"] > div {{
   min-height: 44px !important;
 }}
-[data-testid="stSidebar"] [data-testid="stTextInput"] input,
-[data-testid="stSidebar"] [data-baseweb="select"] > div {{
+/* Round slider thumb */
+[data-testid="stSidebar"] [role="slider"] {{
+  width: 20px !important;
+  height: 20px !important;
+  min-height: unset !important;
+  border-radius: 50% !important;
+  box-sizing: border-box !important;
+}}
+[data-testid="stSidebar"] [data-testid="stTextInput"] input {{
   padding-top: 10px !important;
   padding-bottom: 10px !important;
 }}
@@ -434,6 +632,12 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
 .glass-card:hover {{
   transform: {card_hover_transform};
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+}}
+
+/* Equal-height decision cards */
+.decision-card {{
+  height: 250px !important;
+  overflow: hidden !important;
 }}
 
 /* Horizontal hourly strip — hide scrollbar */
@@ -488,6 +692,77 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
   top: 12px;
 }}
 
+/* Responsive layout */
+@media (max-width: 1200px) {{
+  .block-container {{
+    max-width: 1000px !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }}
+}}
+
+@media (max-width: 900px) {{
+  .block-container {{
+    padding-top: 0.75rem !important;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }}
+  div[data-testid="stHorizontalBlock"] {{
+    flex-direction: column !important;
+    gap: 10px !important;
+  }}
+  div[data-testid="stHorizontalBlock"] > div {{
+    width: 100% !important;
+    min-width: 100% !important;
+    flex: 1 1 100% !important;
+  }}
+  .glass-card {{
+    padding: 16px !important;
+    border-radius: 16px !important;
+    margin-bottom: 12px !important;
+  }}
+  .hero-temp {{
+    font-size: 68px !important;
+  }}
+  .hero-kicker {{
+    font-size: 12px !important;
+    letter-spacing: 2px !important;
+  }}
+  .hero-condition {{
+    font-size: 19px !important;
+  }}
+}}
+
+@media (max-width: 560px) {{
+  .glass-card {{
+    padding: 14px !important;
+    border-radius: 14px !important;
+  }}
+  .hourly-strip {{
+    padding: 0 8px 6px !important;
+  }}
+  .hour-cell {{
+    min-width: 56px !important;
+    padding: 8px 4px !important;
+  }}
+  .hero-temp {{
+    font-size: 56px !important;
+  }}
+  .hero-kicker {{
+    font-size: 11px !important;
+  }}
+  .hero-condition {{
+    font-size: 17px !important;
+  }}
+  .hero-stats {{
+    font-size: 13px !important;
+  }}
+  .decision-card {{
+    height: auto !important;
+    min-height: 210px !important;
+  }}
+}}
+
 /* Success/spinner text colour fix */
 [data-testid="stAlert"] {{ background: rgba(255,255,255,0.1) !important; border-radius: 12px !important; }}
 
@@ -540,27 +815,44 @@ st.markdown(
 temp_c     = forecast["temperature_c"]
 wind_kmh   = forecast["wind_speed_kmh"]
 precip_pct = forecast["precipitation_probability"] * 100
+humidity_pct = float(forecast.get("humidity_percent", max(20.0, min(100.0, 45.0 + precip_pct * 0.45))))
 frost_tonight = "❄️ Frost Risk Tonight" if forecast["frost_risk"] else "✓ No Frost Risk"
+display_temp_major = _temp_to_display(temp_c)
+display_temp_unit = "F" if is_imperial else "C"
+display_wind = _format_wind(wind_kmh, 0)
+_window_temps = [
+    float(h.get("temp_c"))
+    for h in visible_hourly
+    if isinstance(h, dict) and h.get("temp_c") is not None
+]
+_window_high_c = max(_window_temps) if _window_temps else temp_c
+_window_low_c = min(_window_temps) if _window_temps else temp_c
+_window_high = _format_temp(_window_high_c, 0)
+_window_low = _format_temp(_window_low_c, 0)
 
 st.markdown(f"""
-<div style="text-align:center; padding:36px 20px 20px;" role="banner">
-  <div style="font-size:13px; font-weight:500; letter-spacing:3px;
+<div class="hero-wrap" style="text-align:center; padding:36px 20px 20px;" role="banner">
+  <div class="hero-kicker" style="font-size:13px; font-weight:500; letter-spacing:3px;
               text-transform:uppercase; color:var(--text-secondary);
               margin-bottom:10px;">
     🌾 FARMCAST &nbsp;·&nbsp; {resolved_location_name.upper()}
   </div>
-  <div style="font-family:'DM Serif Display', Georgia, serif;
+  <div class="hero-temp" style="font-family:'DM Serif Display', Georgia, serif;
               font-size:96px; font-weight:400; color:var(--text-primary);
               line-height:1; margin-bottom:8px;
               text-shadow: 0 4px 40px rgba(0,0,0,0.3);">
-    {temp_c:.0f}°
+    {display_temp_major:.0f}°{display_temp_unit}
   </div>
-  <div style="font-size:22px; font-weight:300; color:var(--text-secondary);
+  <div class="hero-condition" style="font-size:22px; font-weight:300; color:var(--text-secondary);
               margin-bottom:10px; letter-spacing:0.02em;">
     {condition_label}
   </div>
-  <div style="font-size:15px; color:var(--text-secondary); letter-spacing:0.01em;">
-    Wind {wind_kmh:.0f} km/h &nbsp;·&nbsp;
+  <div style="font-size:15px; color:var(--text-primary); font-weight:600; letter-spacing:0.01em; margin-bottom:4px;">
+    Next 24h: H {_window_high} &nbsp;·&nbsp; L {_window_low}
+  </div>
+  <div class="hero-stats" style="font-size:15px; color:var(--text-secondary); letter-spacing:0.01em;">
+    Wind {display_wind} &nbsp;·&nbsp;
+    Humidity {humidity_pct:.0f}% &nbsp;·&nbsp;
     Rain {precip_pct:.0f}% &nbsp;·&nbsp;
     {frost_tonight}
   </div>
@@ -570,8 +862,8 @@ st.markdown(f"""
 # ---------------------------------------------------------------------------
 # Hourly Forecast Strip
 # ---------------------------------------------------------------------------
-hourly           = forecast["hourly"]
-current_hour_str = f"{datetime.now().hour:02d}:00"
+# `visible_hourly`, `current_hour_str`, `_local_now`, and `_local_tz_label`
+# are prepared above so this strip always represents a rolling next-24h view.
 
 
 def _hour_icon(h: dict) -> str:
@@ -588,19 +880,24 @@ def _hour_icon(h: dict) -> str:
 
 
 hour_cells = ""
-for h in hourly:
+for h in visible_hourly:
     is_now = h["hour"] == current_hour_str
     hl_bg  = "rgba(255,255,255,0.16)" if is_now else "transparent"
     fw     = "700" if is_now else "400"
+    day_suffix = " +1d" if h.get("next_day") else ""
+    h_temp = _temp_to_display(h["temp_c"])
+    h_wind = _wind_to_display(h["wind_kmh"])
+    h_temp_unit = "F" if is_imperial else "C"
+    h_wind_unit = "mph" if is_imperial else "km/h"
     
     # NO INDENTATION ALLOWED: Streamlit will markdown-parse indented blocks as <pre><code>!
     cell = (
-        f'<div style="min-width:66px; display:flex; flex-direction:column; align-items:center; '
+        f'<div class="hour-cell" style="min-width:66px; display:flex; flex-direction:column; align-items:center; '
         f'padding:10px 6px; border-radius:16px; background:{hl_bg}; flex-shrink:0;">'
-        f'<div style="font-size:12px; color:var(--text-secondary); font-weight:{fw}; margin-bottom:4px;">{h["hour"]}</div>'
+        f'<div style="font-size:12px; color:var(--text-secondary); font-weight:{fw}; margin-bottom:4px;">{h["hour"]}{day_suffix}</div>'
         f'<div style="font-size:26px; line-height:1; margin-bottom:6px;" aria-hidden="true">{_hour_icon(h)}</div>'
-        f'<div style="font-size:16px; font-weight:600; color:var(--text-primary);">{h["temp_c"]:.0f}°</div>'
-        f'<div style="font-size:11px; color:var(--accent); margin-top:3px;">{h["wind_kmh"]:.0f} km/h</div>'
+        f'<div style="font-size:16px; font-weight:600; color:var(--text-primary);">{h_temp:.0f}°{h_temp_unit}</div>'
+        f'<div style="font-size:11px; color:var(--accent); margin-top:3px;">{h_wind:.0f} {h_wind_unit}</div>'
         f'</div>'
     )
     hour_cells += cell
@@ -608,7 +905,10 @@ for h in hourly:
 st.markdown(f"""
 <div class="glass-card" style="padding:16px 0 10px;" role="region" aria-label="Hourly forecast">
 <div style="padding:0 20px 10px; font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--text-secondary); font-weight:500;">
-Hourly Forecast
+Upcoming Forecast
+</div>
+<div style="padding:0 20px 8px; font-size:11px; color:var(--text-secondary);">
+Local time {_local_now.strftime('%H:%M')} ({_local_tz_label})
 </div>
 <div class="hourly-strip">
 {hour_cells}
@@ -805,23 +1105,31 @@ def _compact_reason(reason: str, max_words: int = 14) -> str:
     return " ".join(words[:max_words]).rstrip(".,;:") + "…"
 
 
+_wind_dir_label = _format_wind_dir(float(forecast["wind_direction_deg"]))
 CARD_METRICS = [
-    f"Wind {forecast['wind_speed_kmh']:.0f} km/h · Rain {forecast['precipitation_probability']*100:.0f}%",
-    f"Rain {forecast['precipitation_mm']:.1f} mm",
-    f"{'Frost risk' if forecast['frost_risk'] else 'No frost'} · Wind {forecast['wind_speed_kmh']:.0f} km/h",
-    f"Temp {forecast['temperature_c']:.1f}°C",
+    f"Wind {_format_wind(forecast['wind_speed_kmh'], 0)} · {_wind_dir_label}",
+    f"Rain {_format_precip(forecast['precipitation_mm'], 1)} · Humidity {humidity_pct:.0f}%",
+    f"{'Frost risk' if forecast['frost_risk'] else 'No frost'} · Humidity {humidity_pct:.0f}%",
+    f"Temp {_format_temp(forecast['temperature_c'], 1)} · Humidity {humidity_pct:.0f}%",
+]
+
+CARD_HIGHLIGHTS = [
+    f"{_format_wind(forecast['wind_speed_kmh'], 0)} · {humidity_pct:.0f}% RH",
+    f"{_format_precip(forecast['precipitation_mm'], 1)}",
+    f"{'Frost risk' if forecast['frost_risk'] else 'No frost'}",
+    f"{_format_temp(forecast['temperature_c'], 1)}",
 ]
 
 card_cols = st.columns(2)
 for idx, card in enumerate(decisions):
     col         = card_cols[idx % 2]
     verdict     = card["verdict"]
-    vg          = VERDICT_GLASS[verdict]
+    vg          = active_verdict_glass[verdict]
     extra_class = "avoid-pulse" if verdict == AVOID else ""
 
     with col:
         st.markdown(f"""
-        <div class="glass-card {extra_class}"
+        <div class="glass-card decision-card {extra_class}"
              style="border-left:3px solid {vg['border']};
                     min-height:182px;
                     display:flex; justify-content:space-between;
@@ -834,12 +1142,17 @@ for idx, card in enumerate(decisions):
                         color:var(--text-secondary);">
               {card['icon']} &nbsp;{card['activity']}
             </div>
-            <div style="font-size:14px; color:var(--text-primary); line-height:1.4;
+            <div style="font-size:30px; font-weight:700; color:var(--text-primary);
+                        line-height:1.05; letter-spacing:-0.01em;
+                        min-height:2.2em; display:flex; align-items:flex-end;">
+              {CARD_HIGHLIGHTS[idx]}
+            </div>
+            <div style="font-size:13px; color:var(--text-primary); line-height:1.35; opacity:0.92;
                         display:-webkit-box; -webkit-line-clamp:2;
                         -webkit-box-orient:vertical; overflow:hidden;">
               {_compact_reason(card['reason'])}
             </div>
-            <div style="font-size:12px; color:var(--text-secondary); margin-top:auto;">
+            <div style="font-size:16px; color:var(--text-secondary); margin-top:auto; font-weight:600;">
               {CARD_METRICS[idx]}
             </div>
             <div style="font-size:12px; color:var(--text-primary);">
@@ -875,7 +1188,7 @@ if forecast["frost_risk"]:
         </div>
         <div style="font-size:13px; color:rgba(255,255,255,0.72); line-height:1.5;">
           Protect vulnerable crops and bring in livestock before dusk.
-          Temperature dropping to {forecast['temperature_c']:.1f}°C.
+          Temperature dropping to {_format_temp(forecast['temperature_c'], 1)}.
         </div>
       </div>
     </div>
@@ -900,7 +1213,7 @@ st.markdown(f"""
   </div>
   <div style="font-size:16px; line-height:1.75; color:var(--text-primary);
               font-style:italic;">
-    "{advisory_text}"
+    {advisory_text}
   </div>
   <div style="font-size:11px; color:var(--text-secondary); margin-top:12px; text-align:right;">
     Powered by Ollama &nbsp;·&nbsp; {OLLAMA_MODEL}
@@ -988,7 +1301,7 @@ with ctrl_col1:
             time.sleep(0.8)
             if forecast["precipitation_mm"] >= 2.0:
                 st.session_state["tractor_status"] = "Blocked: wet soil"
-                st.error(f"Blocked. Rain is {forecast['precipitation_mm']:.1f} mm.")
+                st.error(f"Blocked. Rain is {_format_precip(forecast['precipitation_mm'], 1)}.")
                 _show_control_gif("tractor_fail.gif", "Too wet for safe field work.")
             else:
                 st.session_state["tractor_status"] = "Running: field work active"
@@ -1003,7 +1316,7 @@ with ctrl_col2:
             time.sleep(0.8)
             if forecast["wind_speed_kmh"] >= 15.0:
                 st.session_state["sprayer_status"] = "Blocked: high wind"
-                st.warning(f"Blocked. Wind is {forecast['wind_speed_kmh']:.0f} km/h.")
+                st.warning(f"Blocked. Wind is {_format_wind(forecast['wind_speed_kmh'], 0)}.")
                 _show_control_gif("drone_fail.gif", "Wind is too high for precision spraying.")
             elif forecast["precipitation_mm"] > 0.0:
                 st.session_state["sprayer_status"] = "Blocked: rain risk"
@@ -1080,8 +1393,8 @@ active_lon = custom_lon if custom_lon is not None else REGION_COORDS.get(selecte
 active_label = resolved_location_name if custom_lat is not None else selected_region
 
 global_map = folium.Map(
-    location=[20, 0],
-    zoom_start=2,
+    location=[54.5, -3.0],
+    zoom_start=5,
     min_zoom=2,
     tiles=None,
     control_scale=True,
@@ -1106,8 +1419,9 @@ folium.Marker(
     tooltip=f"{active_label} (active)",
     popup=folium.Popup(
         f"<b>{active_label}</b><br>"
-        f"Temp: {forecast['temperature_c']:.1f}°C<br>"
-        f"Wind: {forecast['wind_speed_kmh']:.1f} km/h<br>"
+        f"Temp: {_format_temp(forecast['temperature_c'], 1)}<br>"
+        f"Wind: {_format_wind(forecast['wind_speed_kmh'], 1)}<br>"
+        f"Humidity: {humidity_pct:.0f}%<br>"
         f"Rain prob: {forecast['precipitation_probability']*100:.0f}%",
         max_width=220,
     ),
@@ -1127,7 +1441,7 @@ active_layer.add_to(global_map)
 risk_layer = folium.FeatureGroup(name="UK Regional Risk", show=True)
 for reg, coords in REGION_COORDS.items():
     reg_verdict = region_layers[reg]["verdict"]
-    marker_colour = MARKER_COLOURS[reg_verdict]
+    marker_colour = active_marker_colours[reg_verdict]
     is_active = reg == selected_region and custom_lat is None
     folium.Marker(
         location=coords,
@@ -1157,7 +1471,7 @@ for reg, coords in REGION_COORDS.items():
         fill=True,
         fill_color="#38bdf8",
         fill_opacity=0.5,
-        tooltip=f"{reg}: Wind {wind_kmh:.0f} km/h",
+        tooltip=f"{reg}: Wind {_format_wind(wind_kmh, 0)}",
     ).add_to(wind_layer)
 wind_layer.add_to(global_map)
 
@@ -1167,11 +1481,11 @@ for reg, coords in REGION_COORDS.items():
     reg_fc = region_layers[reg]["forecast"]
     rain_prob = reg_fc["precipitation_probability"]
     if rain_prob < 0.33:
-        rain_color = "#4ade80"
+        rain_color = active_rain_colours["low"]
     elif rain_prob < 0.66:
-        rain_color = "#fbbf24"
+        rain_color = active_rain_colours["mid"]
     else:
-        rain_color = "#f87171"
+        rain_color = active_rain_colours["high"]
     folium.CircleMarker(
         location=coords,
         radius=max(4, min(15, 4 + int(rain_prob * 14))),
@@ -1214,16 +1528,6 @@ if map_result and map_result.get("last_object_clicked_tooltip"):
     if clicked_region in REGIONS and clicked_region != selected_region:
         st.query_params["region"] = clicked_region
         st.rerun()
-
-with st.expander("♿ Accessibility Features"):
-    st.markdown(f"""
-- Adjustable text size slider (current: {font_size_px}px)
-- Optional high-contrast text mode
-- Optional reduced-motion mode
-- Skip link to jump directly to main content
-- Live advisory text-to-speech playback
-- Semantic roles and labels on key forecast sections
-""")
 
 # ---------------------------------------------------------------------------
 # Footer

@@ -7,6 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -38,24 +44,42 @@
                     <div class="form-grid">
                         <div class="input-group">
                             <label for="location">Location</label>
-                            <input type="text" id="location" placeholder="e.g. Singapore, Tokyo, Nairobi" autocomplete="off" required>
+                            <input
+                                type="text"
+                                id="location"
+                                placeholder="e.g. Singapore, Tokyo, Nairobi"
+                                autocomplete="off"
+                                aria-describedby="location-help"
+                                required
+                            >
+                            <p id="location-help" class="field-help">
+                                Include city and country for better geocoding precision.
+                            </p>
                         </div>
-                        
+
                         <div class="input-group">
                             <label for="model-select">Forecast Window</label>
-                            <select id="model-select" required>
+                            <select id="model-select" aria-describedby="model-help" required>
                                 <option value="1" selected>1 Hour Prediction</option>
                                 <option value="3">3 Hour Prediction</option>
                                 <option value="6">6 Hour Prediction</option>
                                 <option value="24">24 Hour Prediction</option>
                             </select>
+                            <p id="model-help" class="field-help">
+                                Lead time in hours from the latest input state.
+                            </p>
                         </div>
                     </div>
 
-                    <button type="submit" id="submit-btn" class="btn-primary">
-                        <span class="btn-text">Predict Weather</span>
-                        <span class="loader hidden" aria-hidden="true"></span>
-                    </button>
+                    <div class="button-row">
+                        <button type="submit" id="submit-btn" class="btn-primary">
+                            <span class="btn-text">Predict Weather</span>
+                            <span class="loader hidden" aria-hidden="true"></span>
+                        </button>
+                        <button type="button" id="refresh-btn" class="btn-secondary" disabled>
+                            Refresh Forecast
+                        </button>
+                    </div>
                 </form>
 
                 <div id="status-banner" class="status-banner" role="status" aria-live="polite">
@@ -64,6 +88,30 @@
                 <p class="assistive-hint">
                     Source fields are shown with timestamps so you can judge data freshness.
                 </p>
+            </section>
+
+            <section class="panel panel-accessibility" aria-labelledby="a11y-title">
+                <div class="panel-header">
+                    <h3 id="a11y-title">Accessibility</h3>
+                    <p>Controls apply immediately and remain keyboard-accessible.</p>
+                </div>
+                <div class="a11y-grid">
+                    <label class="a11y-item" for="text-scale">
+                        <span>Text Size</span>
+                        <input type="range" id="text-scale" min="14" max="22" value="16" step="1">
+                    </label>
+                    <label class="a11y-item check-item" for="high-contrast-toggle">
+                        <input type="checkbox" id="high-contrast-toggle">
+                        <span>High contrast mode</span>
+                    </label>
+                    <label class="a11y-item check-item" for="reduce-motion-toggle">
+                        <input type="checkbox" id="reduce-motion-toggle">
+                        <span>Reduce motion</span>
+                    </label>
+                    <button id="tts-btn" class="btn-secondary" type="button" disabled>
+                        Listen to forecast
+                    </button>
+                </div>
             </section>
 
             <section id="loading-container" class="panel panel-loading hidden" aria-hidden="true">
@@ -81,7 +129,8 @@
                     <p class="eyebrow">Now at</p>
                     <h2 id="result-location" class="hero-location">City Name</h2>
                     <p id="hero-temp" class="hero-temp">-- °C</p>
-                    <p id="hero-summary" class="hero-summary">Wind -- m/s, Pressure -- hPa</p>
+                    <p id="hero-condition" class="hero-condition">--</p>
+                    <p id="hero-summary" class="hero-summary">Wind -- km/h, Rain --%</p>
                     <p id="result-coords" class="muted">Lat: 0, Lon: 0</p>
                 </article>
 
@@ -115,13 +164,13 @@
                         <p id="metric-temp" class="metric-value">-- °C</p>
                         <p class="metric-sub">2m above ground</p>
                     </article>
-                    
+
                     <article class="metric-card">
                         <p class="metric-title">Wind Speed</p>
                         <p id="metric-wind" class="metric-value">-- m/s</p>
                         <p class="metric-sub">10m above ground</p>
                     </article>
-                    
+
                     <article class="metric-card">
                         <p class="metric-title">Sea Level Pressure</p>
                         <p id="metric-pressure" class="metric-value">-- hPa</p>
@@ -131,9 +180,108 @@
                     <article class="metric-card">
                         <p class="metric-title">Wind Direction</p>
                         <p id="metric-direction" class="metric-value">--°</p>
-                        <p class="metric-sub">Meteorological direction</p>
+                        <p id="metric-rain" class="metric-sub">Rain probability --%</p>
                     </article>
                 </div>
+
+                <article class="panel panel-decisions" aria-labelledby="decisions-title">
+                    <div class="panel-header">
+                        <h3 id="decisions-title">Farm Activity Decisions</h3>
+                        <p>Verdict always shown as icon + text. Color is secondary.</p>
+                    </div>
+                    <div id="decision-grid" class="decision-grid">
+                        <article class="decision-card">
+                            <p class="decision-title">Waiting for forecast data</p>
+                        </article>
+                    </div>
+                </article>
+
+                <article class="panel panel-controls" aria-labelledby="controls-title">
+                    <div class="panel-header">
+                        <h3 id="controls-title">Interactive Farm Controls</h3>
+                        <p>Run quick action checks against live forecast conditions.</p>
+                    </div>
+                    <div class="control-grid">
+                        <article class="control-card">
+                            <h4>Tractor</h4>
+                            <button type="button" id="control-tractor-btn" class="btn-secondary" disabled>
+                                Dispatch Tractor
+                            </button>
+                            <p id="control-tractor-status" class="control-status">Status: idle</p>
+                            <img id="control-tractor-gif" class="control-gif hidden" alt="">
+                        </article>
+                        <article class="control-card">
+                            <h4>Sprayer Drone</h4>
+                            <button type="button" id="control-drone-btn" class="btn-secondary" disabled>
+                                Deploy Drone
+                            </button>
+                            <p id="control-drone-status" class="control-status">Status: idle</p>
+                            <img id="control-drone-gif" class="control-gif hidden" alt="">
+                        </article>
+                        <article class="control-card">
+                            <h4>Livestock</h4>
+                            <button type="button" id="control-livestock-btn" class="btn-secondary" disabled>
+                                Check Pasture
+                            </button>
+                            <p id="control-livestock-status" class="control-status">Status: idle</p>
+                            <img id="control-livestock-gif" class="control-gif hidden" alt="">
+                        </article>
+                    </div>
+                </article>
+
+                <article class="panel panel-map" aria-labelledby="map-title">
+                    <div class="panel-header">
+                        <h3 id="map-title">Global Forecast Map</h3>
+                        <p>Dark mode is default. Layer toggles are keyboard and screen-reader accessible.</p>
+                    </div>
+                    <div class="map-layout">
+                        <div id="forecast-map" class="forecast-map" role="application" aria-label="Interactive world forecast map"></div>
+                        <aside class="map-controls" aria-label="Map controls">
+                            <fieldset class="map-fieldset">
+                                <legend>Base map</legend>
+                                <label class="map-option">
+                                    <input type="radio" name="map-base" value="dark" id="map-base-dark" checked>
+                                    <span>Dark</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="radio" name="map-base" value="light" id="map-base-light">
+                                    <span>Light</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="radio" name="map-base" value="satellite" id="map-base-satellite">
+                                    <span>Satellite</span>
+                                </label>
+                            </fieldset>
+                            <fieldset class="map-fieldset">
+                                <legend>Layers</legend>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-active" checked>
+                                    <span>Active Forecast</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-risk" checked>
+                                    <span>UK Regional Risk</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-wind">
+                                    <span>UK Wind Layer</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-rain" checked>
+                                    <span>UK Rain Probability</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-grid" checked>
+                                    <span>Lat/Lon Grid</span>
+                                </label>
+                                <label class="map-option">
+                                    <input type="checkbox" id="map-layer-world" checked>
+                                    <span>World Boundaries</span>
+                                </label>
+                            </fieldset>
+                        </aside>
+                    </div>
+                </article>
 
                 <details class="panel panel-details">
                     <summary>Diagnostics</summary>
@@ -160,6 +308,12 @@
         </footer>
     </div>
 
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
     <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>
