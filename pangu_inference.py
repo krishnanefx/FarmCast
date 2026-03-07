@@ -26,10 +26,6 @@ import os
 import warnings
 
 import numpy as np
-from dotenv import load_dotenv
-
-# Load model paths from .env
-load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Paths — resolved relative to this file so the app works from any cwd
@@ -37,8 +33,8 @@ load_dotenv()
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _PARENT     = os.path.join(_HERE, "..")
 
-MODEL_6H    = os.getenv("PANGU_MODEL_6H_PATH", "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx")
-MODEL_24H   = os.getenv("PANGU_MODEL_24H_PATH", "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx")
+MODEL_6H    = "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx"
+MODEL_24H   = "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx"
 INPUT_DIR   = os.path.join(_PARENT, "input_data")
 CACHE_DIR   = os.path.join(_PARENT, "output_data", "weekly_cache")
 MANIFEST    = os.path.join(CACHE_DIR, "manifest.json")
@@ -72,23 +68,12 @@ def _load_session(model_key: str):
 
     available_providers = ort.get_available_providers()
     if "CUDAExecutionProvider" in available_providers:
-        # Optimized for DGX / PGX with 128GB RAM
-        providers = [
-            ("CUDAExecutionProvider", {
-                "device_id": 0,
-                "arena_extend_strategy": "kNextPowerOfTwo",
-                "gpu_mem_limit": 64 * 1024 * 1024 * 1024, # Limit to 64GB out of 128GB to be safe
-                "cudnn_conv_algo_search": "EXHAUSTIVE",
-                "do_copy_in_default_stream": True,
-            }),
-            "CPUExecutionProvider"
-        ]
-        provider_name = "CUDA (Optimized DGX Arena)"
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif "CoreMLExecutionProvider" in available_providers:
+        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
     else:
         providers = ["CPUExecutionProvider"]
-        provider_name = "CPU"
-        
-    print(f"[pangu_inference] Loading {model_key} model with {provider_name}")
+    print(f"[pangu_inference] Loading {model_key} model with {providers[0]}")
     return ort.InferenceSession(model_path, providers=providers)
 
 

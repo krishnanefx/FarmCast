@@ -1,11 +1,6 @@
 '''
 Pseudocode of Pangu-Weather
 '''
-import os
-from dotenv import load_dotenv
-
-# Load model paths from .env
-load_dotenv()
 # The pseudocode can be implemented using deep learning libraries, e.g., Pytorch and Tensorflow or other high-level APIs
 
 # Basic operations used in our model, namely Linear, Conv3d, Conv2d, ConvTranspose3d and ConvTranspose2d
@@ -70,10 +65,10 @@ def Inference(input, input_surface, forecast_range):
   '''
 
   # Load 4 pre-trained models with different lead times
-  PanguModel24 = LoadModel(os.getenv("PANGU_MODEL_24H_PATH", "models/pangu_weather_24.onnx"))
-  PanguModel6 = LoadModel(os.getenv("PANGU_MODEL_6H_PATH", "models/pangu_weather_6.onnx"))
-  PanguModel3 = LoadModel(os.getenv("PANGU_MODEL_3H_PATH", "models/pangu_weather_3.onnx"))
-  PanguModel1 = LoadModel(os.getenv("PANGU_MODEL_1H_PATH", "models/pangu_weather_1.onnx"))
+  PanguModel24 = LoadModel("models/pangu_weather_24.onnx")
+  PanguModel6 = LoadModel("models/pangu_weather_6.onnx")
+  PanguModel3 = LoadModel("models/pangu_weather_3.onnx")
+  PanguModel1 = LoadModel("models/pangu_weather_1.onnx")
 
   # Load mean and std of the weather data
   weather_mean, weather_std, weather_surface_mean, weather_surface_std = LoadStatic()

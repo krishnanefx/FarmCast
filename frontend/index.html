@@ -3,83 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Global Weather Prediction</title>
+    <title>FarmCast Global Forecast</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="background">
-        <div class="blob1"></div>
-        <div class="blob2"></div>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+
+    <div class="background" aria-hidden="true">
+        <div class="blob blob-a"></div>
+        <div class="blob blob-b"></div>
+        <div class="grid-overlay"></div>
     </div>
+
     <div class="container">
-        <header>
-            <h1>Pangu-Weather</h1>
-            <p>Advanced Global Weather Forecasting via ONNX Runtime</p>
+        <header class="app-header">
+            <p class="eyebrow">FarmCast Intelligence</p>
+            <h1>Pangu-Weather Global Desk</h1>
+            <p class="lead">
+                Forecast summary first, model trust signals second, diagnostics on demand.
+            </p>
         </header>
 
-        <main>
-            <form id="weather-form">
-                <div class="input-group">
-                    <label for="location">Location</label>
-                    <input type="text" id="location" placeholder="e.g. Tokyo, London, New York" required>
+        <main id="main-content" class="app-main">
+            <section class="panel panel-form" aria-labelledby="query-title">
+                <div class="panel-header">
+                    <h2 id="query-title">Request Forecast</h2>
+                    <p>Search any location, then choose lead time.</p>
                 </div>
-                
-                <div class="input-group">
-                    <label for="model-select">Forecast Window</label>
-                    <select id="model-select" required>
-                        <option value="1" selected>1 Hour Prediction</option>
-                        <option value="3">3 Hour Prediction</option>
-                        <option value="6">6 Hour Prediction</option>
-                        <option value="24">24 Hour Prediction</option>
-                    </select>
-                </div>
-                
-                <button type="submit" id="submit-btn">
-                    <span class="btn-text">Predict Weather</span>
-                    <span class="loader hidden"></span>
-                </button>
-            </form>
 
-            <div id="results-container" class="hidden">
-                <div class="result-header">
-                    <h2 id="result-location">City Name</h2>
-                    <p id="result-coords">Lat: 0, Lon: 0</p>
-                    <p id="result-source">Source: loading…</p>
+                <form id="weather-form" novalidate>
+                    <div class="form-grid">
+                        <div class="input-group">
+                            <label for="location">Location</label>
+                            <input type="text" id="location" placeholder="e.g. Singapore, Tokyo, Nairobi" autocomplete="off" required>
+                        </div>
+                        
+                        <div class="input-group">
+                            <label for="model-select">Forecast Window</label>
+                            <select id="model-select" required>
+                                <option value="1" selected>1 Hour Prediction</option>
+                                <option value="3">3 Hour Prediction</option>
+                                <option value="6">6 Hour Prediction</option>
+                                <option value="24">24 Hour Prediction</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submit-btn" class="btn-primary">
+                        <span class="btn-text">Predict Weather</span>
+                        <span class="loader hidden" aria-hidden="true"></span>
+                    </button>
+                </form>
+
+                <div id="status-banner" class="status-banner" role="status" aria-live="polite">
+                    Ready. Enter a location to run a forecast.
                 </div>
+                <p class="assistive-hint">
+                    Source fields are shown with timestamps so you can judge data freshness.
+                </p>
+            </section>
+
+            <section id="loading-container" class="panel panel-loading hidden" aria-hidden="true">
+                <div class="skeleton-row skeleton-hero"></div>
+                <div class="skeleton-grid">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </section>
+
+            <section id="results-container" class="results hidden" tabindex="-1" aria-label="Forecast results">
+                <article class="panel panel-hero">
+                    <p class="eyebrow">Now at</p>
+                    <h2 id="result-location" class="hero-location">City Name</h2>
+                    <p id="hero-temp" class="hero-temp">-- °C</p>
+                    <p id="hero-summary" class="hero-summary">Wind -- m/s, Pressure -- hPa</p>
+                    <p id="result-coords" class="muted">Lat: 0, Lon: 0</p>
+                </article>
+
+                <article class="panel panel-trust" aria-labelledby="trust-title">
+                    <div class="panel-header">
+                        <h3 id="trust-title">Forecast Trust Panel</h3>
+                    </div>
+                    <div class="trust-grid">
+                        <div class="trust-item">
+                            <span class="trust-label">Source</span>
+                            <span id="result-source" class="trust-value">Source unknown</span>
+                        </div>
+                        <div class="trust-item">
+                            <span class="trust-label">Model</span>
+                            <span id="result-model" class="trust-value">--</span>
+                        </div>
+                        <div class="trust-item">
+                            <span class="trust-label">Data Age</span>
+                            <span id="result-age" class="trust-value">--</span>
+                        </div>
+                        <div class="trust-item">
+                            <span class="trust-label">Last Updated</span>
+                            <span id="result-updated" class="trust-value">--</span>
+                        </div>
+                    </div>
+                </article>
                 
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <div class="metric-icon temp-icon"></div>
-                        <h3>Temperature</h3>
+                <div class="metrics-grid" aria-label="Key weather metrics">
+                    <article class="metric-card">
+                        <p class="metric-title">Temperature</p>
                         <p id="metric-temp" class="metric-value">-- °C</p>
                         <p class="metric-sub">2m above ground</p>
-                    </div>
+                    </article>
                     
-                    <div class="metric-card">
-                        <div class="metric-icon wind-icon"></div>
-                        <h3>Wind Speed</h3>
+                    <article class="metric-card">
+                        <p class="metric-title">Wind Speed</p>
                         <p id="metric-wind" class="metric-value">-- m/s</p>
                         <p class="metric-sub">10m above ground</p>
-                    </div>
+                    </article>
                     
-                    <div class="metric-card">
-                        <div class="metric-icon pressure-icon"></div>
-                        <h3>Sea Level Pressure</h3>
+                    <article class="metric-card">
+                        <p class="metric-title">Sea Level Pressure</p>
                         <p id="metric-pressure" class="metric-value">-- hPa</p>
                         <p class="metric-sub">Mean sea level</p>
-                    </div>
+                    </article>
+
+                    <article class="metric-card">
+                        <p class="metric-title">Wind Direction</p>
+                        <p id="metric-direction" class="metric-value">--°</p>
+                        <p class="metric-sub">Meteorological direction</p>
+                    </article>
                 </div>
-            </div>
+
+                <details class="panel panel-details">
+                    <summary>Diagnostics</summary>
+                    <ul id="diagnostics-list" class="diagnostics-list">
+                        <li>Waiting for forecast response.</li>
+                    </ul>
+                </details>
+            </section>
             
-            <div id="error-container" class="hidden">
+            <section id="error-container" class="panel panel-error hidden" role="alert" aria-live="assertive">
+                <h2>Forecast could not be completed</h2>
                 <p id="error-message">An error occurred.</p>
-            </div>
+                <div id="error-help" class="error-help">
+                    <p>Check model files, input fields, and location spelling, then retry.</p>
+                </div>
+            </section>
         </main>
+
+        <div id="screen-reader-status" class="sr-only" role="status" aria-live="polite">
+            Ready.
+        </div>
+        <footer class="app-footer">
+            <p>FarmCast global mode uses Pangu-Weather outputs with source timestamps for verification.</p>
+        </footer>
     </div>
-    
-    <script src="/static/script.js"></script>
+
+    <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

@@ -1,0 +1,16 @@
+{
+  "name": "farmcast-hpc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FarmCast HPC map-data preload and API serve scripts",
+  "scripts": {
+    "map:load": "node scripts/load-map-data.mjs",
+    "prestart:hpc": "npm run map:load",
+    "start:hpc": "sh -c 'uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8501}'",
+    "serve:hpc": "npm run start:hpc",
+    "start": "npm run start:hpc"
+  },
+  "dependencies": {
+    "world-atlas": "^2.0.2"
+  }
+}

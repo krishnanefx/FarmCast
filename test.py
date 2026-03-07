@@ -1,12 +1,7 @@
 import numpy as np
 import onnxruntime as ort
-import os
-from dotenv import load_dotenv
 
-# Load model paths from .env
-load_dotenv()
-
-MODEL_PATH = os.getenv("PANGU_MODEL_1H_PATH", "models/pangu_weather_1.onnx")  # change if needed
+MODEL_PATH = "models/pangu_weather_1.onnx"  # change if needed
 
 def main():
     session = ort.InferenceSession(

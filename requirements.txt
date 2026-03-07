@@ -3,7 +3,6 @@ plotly
 folium
 streamlit-folium
 requests
-geopy
 numpy
 python-dateutil
 onnxruntime-gpu
@@ -14,6 +13,5 @@ onnxruntime-gpu
 cdsapi
 cfgrib
 xarray
-netcdf4
 eccodes
 python-dotenv
