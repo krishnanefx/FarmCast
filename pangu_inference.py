@@ -68,12 +68,23 @@ def _load_session(model_key: str):
 
     available_providers = ort.get_available_providers()
     if "CUDAExecutionProvider" in available_providers:
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    elif "CoreMLExecutionProvider" in available_providers:
-        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        # Optimized for DGX / PGX with 128GB RAM
+        providers = [
+            ("CUDAExecutionProvider", {
+                "device_id": 0,
+                "arena_extend_strategy": "kNextPowerOfTwo",
+                "gpu_mem_limit": 64 * 1024 * 1024 * 1024, # Limit to 64GB out of 128GB to be safe
+                "cudnn_conv_algo_search": "EXHAUSTIVE",
+                "do_copy_in_default_stream": True,
+            }),
+            "CPUExecutionProvider"
+        ]
+        provider_name = "CUDA (Optimized DGX Arena)"
     else:
         providers = ["CPUExecutionProvider"]
-    print(f"[pangu_inference] Loading {model_key} model with {providers[0]}")
+        provider_name = "CPU"
+        
+    print(f"[pangu_inference] Loading {model_key} model with {provider_name}")
     return ort.InferenceSession(model_path, providers=providers)
 
 

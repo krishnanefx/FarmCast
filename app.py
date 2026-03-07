@@ -159,7 +159,7 @@ with st.sidebar:
     try:
         import onnxruntime as _ort
         _providers = _ort.get_available_providers()
-        _gpu = "CUDAExecutionProvider" in _providers or "CoreMLExecutionProvider" in _providers
+        _gpu = "CUDAExecutionProvider" in _providers
     except ImportError:
         _gpu = False
 

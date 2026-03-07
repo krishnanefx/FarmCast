@@ -73,12 +73,23 @@ def _run_inference(model_path: str, input_dir: str, output_dir: str) -> tuple:
 
     available_providers = ort.get_available_providers()
     if "CUDAExecutionProvider" in available_providers:
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    elif "CoreMLExecutionProvider" in available_providers:
-        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        # Optimized for DGX / PGX with 128GB RAM
+        providers = [
+            ("CUDAExecutionProvider", {
+                "device_id": 0,
+                "arena_extend_strategy": "kNextPowerOfTwo",
+                "gpu_mem_limit": 64 * 1024 * 1024 * 1024, # Limit to 64GB out of 128GB to be safe
+                "cudnn_conv_algo_search": "EXHAUSTIVE",
+                "do_copy_in_default_stream": True,
+            }),
+            "CPUExecutionProvider"
+        ]
+        provider_name = "CUDA (Optimized DGX Arena)"
     else:
         providers = ["CPUExecutionProvider"]
-    print(f"[FarmCast] Running Pangu-Weather inference with: {providers[0]}")
+        provider_name = "CPU"
+        
+    print(f"[FarmCast] Running Pangu-Weather inference with: {provider_name}")
 
     sess = ort.InferenceSession(model_path, providers=providers)
 
