@@ -20,6 +20,11 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
+try:
+    from backend.era5_fetcher import ensure_era5_inputs
+except Exception:  # noqa: BLE001
+    ensure_era5_inputs = None
+
 # ---------------------------------------------------------------------------
 # Region grid coordinates
 # Latitude index  = int((90 - lat) / 0.25)
@@ -93,13 +98,26 @@ def _run_inference(model_path: str, input_dir: str, output_dir: str) -> tuple:
 
     sess = ort.InferenceSession(model_path, providers=providers)
 
-    outputs = sess.run(
-        ["output", "output_surface"],
-        {"input": input_upper, "input_surface": input_surface},
-    )
+    # Model variants differ in input shape requirements:
+    # some expect [C,H,W], others [B,C,H,W].
+    try:
+        outputs = sess.run(
+            ["output", "output_surface"],
+            {"input": input_upper, "input_surface": input_surface},
+        )
+    except Exception:
+        outputs = sess.run(
+            ["output", "output_surface"],
+            {"input": input_upper[np.newaxis, ...], "input_surface": input_surface[np.newaxis, ...]},
+        )
 
-    output_upper   = outputs[0]   # (5, 13, 721, 1440)
-    output_surface = outputs[1]   # (4, 721, 1440)
+    output_upper   = outputs[0]
+    output_surface = outputs[1]
+
+    while output_upper.ndim > 4:
+        output_upper = output_upper[0]
+    while output_surface.ndim > 3:
+        output_surface = output_surface[0]
 
     return output_upper, output_surface
 
@@ -111,7 +129,8 @@ def _load_or_run(model_path: str, input_dir: str, output_dir: str,
     Saves inference results to output_dir/pangu_output.npz for reuse.
     """
     os.makedirs(output_dir, exist_ok=True)
-    cache_path = os.path.join(output_dir, "pangu_output.npz")
+    model_tag = os.path.splitext(os.path.basename(model_path))[0]
+    cache_path = os.path.join(output_dir, f"{model_tag}_output.npz")
 
     if not force_refresh and os.path.exists(cache_path):
         print("[FarmCast] Loading Pangu-Weather output from cache.")
@@ -256,7 +275,16 @@ def get_forecast(
         lat, lon = coords
         
     if model_path is None:
-        model_path = f"/home/green5/pangu_weather_{model_hours}.onnx"
+        env_key = f"PANGU_MODEL_{model_hours}H_PATH"
+        env_model_path = os.getenv(env_key)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            env_model_path,
+            os.path.join(base_dir, f"pangu_weather_{model_hours}.onnx"),
+            os.path.join(base_dir, "..", f"pangu_weather_{model_hours}.onnx"),
+            os.path.join(os.path.expanduser("~"), "Downloads", f"pangu_weather_{model_hours}.onnx"),
+        ]
+        model_path = next((p for p in candidates if p and os.path.exists(p)), candidates[1])
 
     # Resolve paths relative to this file's directory so the app works regardless
     # of the process working directory.
@@ -264,6 +292,13 @@ def get_forecast(
     model_path = os.path.join(base_dir, model_path) if not os.path.isabs(model_path) else model_path
     input_dir  = os.path.join(base_dir, input_dir)  if not os.path.isabs(input_dir)  else input_dir
     output_dir = os.path.join(base_dir, output_dir) if not os.path.isabs(output_dir) else output_dir
+
+    # Keep atmospheric inputs fresh when ERA5 fetch support is available.
+    if ensure_era5_inputs is not None:
+        try:
+            ensure_era5_inputs(input_dir, force_refresh=force_refresh)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[FarmCast] ERA5 auto-refresh unavailable: {exc}")
 
     # Check that model and inputs exist before attempting inference
     surface_path = os.path.join(input_dir, "input_surface.npy")
@@ -294,8 +329,7 @@ def get_forecast(
     # output_surface shape: (4, 721, 1440)
     # Variables: [0] MSLP (Pa), [1] U10 (m/s), [2] V10 (m/s), [3] T2M (K)
     # ------------------------------------------------------------------
-    coords = _REGION_GRID.get(region, _REGION_GRID["East Midlands"])
-    lat_idx, lon_idx = _grid_index(coords["lat"], coords["lon"])
+    lat_idx, lon_idx = _grid_index(float(lat), float(lon))
 
     mslp = float(output_surface[0, lat_idx, lon_idx])   # Pa
     u10  = float(output_surface[1, lat_idx, lon_idx])   # m/s
@@ -310,12 +344,10 @@ def get_forecast(
     # Multi-factor precipitation heuristic
     # Low pressure increases rain probability
     mslp_factor = float(np.clip((101325.0 - mslp) / 3000.0, 0.0, 1.0))
-    # Westerly winds (225-270°) bring Atlantic moisture to the UK
-    wind_dir_rad = math.radians(wind_direction_deg)
-    westerly_factor = float(np.clip((math.cos(wind_dir_rad - math.radians(247)) + 1.0) / 2.0, 0.0, 1.0))
+    # Global heuristic: avoid UK-specific directional bias.
     wind_mag_factor = float(np.clip(wind_speed_kmh / 60.0, 0.0, 1.0))
     precip_probability = round(float(np.clip(
-        0.5 * mslp_factor + 0.3 * westerly_factor * wind_mag_factor + 0.1,
+        0.6 * mslp_factor + 0.3 * wind_mag_factor + 0.1,
         0.0, 1.0,
     )), 3)
     precipitation_mm   = round(precip_probability * 3.0, 2)
@@ -470,8 +502,8 @@ def _mock_weekly_forecast(region: str) -> list:
 
 def get_weekly_forecast(
     region: str,
-    model_6h_path:  str = "/home/green5/pangu_weather_6.onnx",
-    model_24h_path: str = "/home/green5/pangu_weather_24.onnx",
+    model_6h_path:  str = os.getenv("PANGU_MODEL_6H_PATH", "/Users/krishnanadaikkappan/Downloads/pangu_weather_6.onnx"),
+    model_24h_path: str = os.getenv("PANGU_MODEL_24H_PATH", "/Users/krishnanadaikkappan/Downloads/pangu_weather_24.onnx"),
     input_dir:      str = "../input_data",
     output_dir:     str = "../output_data",
     force_refresh:  bool = False,

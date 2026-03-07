@@ -30,10 +30,10 @@
                 <div class="input-group">
                     <label for="model-select">Forecast Window</label>
                     <select id="model-select" required>
-                        <option value="1">1 Hour Prediction</option>
+                        <option value="1" selected>1 Hour Prediction</option>
                         <option value="3">3 Hour Prediction</option>
                         <option value="6">6 Hour Prediction</option>
-                        <option value="24" selected>24 Hour Prediction</option>
+                        <option value="24">24 Hour Prediction</option>
                     </select>
                 </div>
                 
@@ -47,6 +47,7 @@
                 <div class="result-header">
                     <h2 id="result-location">City Name</h2>
                     <p id="result-coords">Lat: 0, Lon: 0</p>
+                    <p id="result-source">Source: loading…</p>
                 </div>
                 
                 <div class="metrics-grid">

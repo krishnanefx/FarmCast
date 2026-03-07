@@ -14,6 +14,10 @@ from streamlit_folium import st_folium
 from data_loader import get_forecast, get_weekly_forecast
 from decision_logic import get_all_decisions, get_worst_verdict, GOOD, CAUTION, AVOID
 from ollama_client import get_advisory, DEFAULT_MODEL
+from dotenv import load_dotenv
+
+# Load model paths from .env
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Result elements
     const resLocation = document.getElementById('result-location');
     const resCoords = document.getElementById('result-coords');
+    const resSource = document.getElementById('result-source');
     const metTemp = document.getElementById('metric-temp');
     const metWind = document.getElementById('metric-wind');
     const metPressure = document.getElementById('metric-pressure');
@@ -62,6 +63,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // Update DOM
             resLocation.textContent = data.location;
             resCoords.textContent = `Lat: ${data.coordinates.lat.toFixed(4)}, Lon: ${data.coordinates.lon.toFixed(4)} | Grid: [${data.grid_idx.lat_idx}, ${data.grid_idx.lon_idx}]`;
+            const src = (() => {
+                if (!data.source || !data.source.present) {
+                    return `Source: ${data.source && data.source.warning ? data.source.warning : 'No source metadata'}`;
+                }
+                if (data.source.date || data.source.time) {
+                    const age = typeof data.source.age_hours === 'number' ? `, age ${data.source.age_hours}h` : '';
+                    return `Source: ${data.source.date || 'unknown-date'} ${data.source.time || ''} (${data.source.fetched_at || 'no fetch timestamp'}${age})`;
+                }
+                const age = typeof data.source.age_hours === 'number' ? `, age ${data.source.age_hours}h` : '';
+                return `Source: ${data.source.analysis_time || 'unknown-analysis'} (${data.source.download_time || 'no download timestamp'}${age})`;
+            })();
+            resSource.textContent = src;
 
             metTemp.textContent = `${temp.toFixed(1)} °C`;
             metWind.textContent = `${windSpeed.toFixed(1)} m/s`;
