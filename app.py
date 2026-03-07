@@ -164,33 +164,46 @@ with st.sidebar:
         _gpu = False
 
     gpu_colour = "#4ade80" if _gpu else "#fbbf24"
-    gpu_label  = "⚡ AI Accelerator Active" if _gpu else "💻 CPU Mode"
-    st.markdown(
-        f'<div style="font-weight:700; color:{gpu_colour}; font-size:14px;">{gpu_label}</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(f"Model: Pangu-Weather {model_hours}hr ONNX")
-
+    gpu_label  = "⚡ AI Accelerator Active" if _gpu else "💻 CPU Inference Mode"
+    
     _meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "input_data", "era5_meta.json")
     if os.path.exists(_meta_path):
         with open(_meta_path) as _f:
             _meta = json.load(_f)
         _src = f"ERA5 {_meta['date']} {_meta['time']} UTC"
     else:
-        _src = "Mock Data"
-
-    st.caption(f"Source: {_src}")
-    st.caption(f"Updated: {datetime.now().strftime('%d %b %Y, %H:%M')}")
+        _src = "Mock Data Fallback"
 
     # Weekly cache status
     try:
         from pangu_inference import count_cached_steps
         _cached = count_cached_steps()
         _total  = 13
-        _weekly_src = f"{_cached}/{_total} steps cached" if _cached > 0 else "No cache"
+        _weekly_src = f"{_cached}/{_total} cached" if _cached > 0 else "0/13 steps cached"
     except Exception:
-        _weekly_src = "Mock data"
-    st.caption(f"Weekly: {_weekly_src}")
+        _weekly_src = "Mock Data"
+
+    st.markdown(f"""
+<div style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:16px; margin-top:20px;">
+  <div style="font-size:11px; letter-spacing:2px; text-transform:uppercase; color:rgba(255,255,255,0.5); font-weight:600; margin-bottom:12px;">System Status</div>
+  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
+    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Compute Engine</span>
+    <span style="font-size:12px; font-weight:700; color:{gpu_colour};">{gpu_label}</span>
+  </div>
+  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
+    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Loaded Model</span>
+    <span style="font-size:12px; color:white; font-weight:500;">Pangu-Weather {model_hours}h</span>
+  </div>
+  <div style="display:flex; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin-bottom:8px;">
+    <span style="font-size:12px; color:rgba(255,255,255,0.7);">7-Day Cache</span>
+    <span style="font-size:12px; color:white; font-weight:500;">{_weekly_src}</span>
+  </div>
+  <div style="display:flex; justify-content:space-between; padding-bottom:4px;">
+    <span style="font-size:12px; color:rgba(255,255,255,0.7);">Data Source</span>
+    <span style="font-size:12px; color:white; font-weight:500;">{_src}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Theme — computed from forecast conditions
@@ -250,10 +263,11 @@ header[data-testid="stHeader"] {{
   background: linear-gradient(
     170deg,
     var(--bg-top)    0%,
-    var(--bg-mid)   45%,
+    var(--bg-mid)   50%,
     var(--bg-bottom) 100%
   ) !important;
   min-height: 100vh;
+  background-attachment: fixed !important; 
 }}
 
 /* Transparent scaffolding */
@@ -281,13 +295,17 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] .stCaption {{ color: rgba(255,255,255,0.8) !important; }}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {{
-  background: rgba(255,255,255,0.12) !important;
-  border: 1px solid rgba(255,255,255,0.22) !important;
+  background: rgba(255,255,255,0.08) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
   color: white !important;
-  border-radius: 10px !important;
+  border-radius: 12px !important;
+  transition: border-color 0.2s;
+}}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div:hover {{
+  border-color: rgba(255,255,255,0.3) !important;
 }}
 [data-testid="stSidebar"] .stButton > button {{
-  border-radius: 20px !important;
+  border-radius: 12px !important;
   font-weight: 600 !important;
   letter-spacing: 0.02em !important;
   border: 1px solid rgba(255,255,255,0.3) !important;
@@ -303,13 +321,20 @@ div[data-testid="stHorizontalBlock"] {{ gap: 12px; }}
 /* Frosted glass card */
 .glass-card {{
   background: var(--card-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--card-border);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px inset var(--card-border);
   border-radius: 20px;
-  padding: 20px;
-  margin-bottom: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
   color: var(--text-primary);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255,255,255,0.1);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.3s ease;
+}}
+
+.glass-card:hover {{
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.15);
 }}
 
 /* Horizontal hourly strip — hide scrollbar */
@@ -450,24 +475,27 @@ for h in hourly:
     is_now = h["hour"] == current_hour_str
     hl_bg  = "rgba(255,255,255,0.16)" if is_now else "transparent"
     fw     = "700" if is_now else "400"
-    hour_cells += f"""
-    <div style="min-width:66px; display:flex; flex-direction:column; align-items:center;
-                padding:10px 6px; border-radius:16px; background:{hl_bg}; flex-shrink:0;">
-      <div style="font-size:12px; color:var(--text-secondary); font-weight:{fw}; margin-bottom:4px;">{h['hour']}</div>
-      <div style="font-size:26px; line-height:1; margin-bottom:6px;" aria-hidden="true">{_hour_icon(h)}</div>
-      <div style="font-size:16px; font-weight:600; color:var(--text-primary);">{h['temp_c']:.0f}°</div>
-      <div style="font-size:11px; color:var(--accent); margin-top:3px;">{h['wind_kmh']:.0f} km/h</div>
-    </div>"""
-
+    
+    # NO INDENTATION ALLOWED: Streamlit will markdown-parse indented blocks as <pre><code>!
+    cell = (
+        f'<div style="min-width:66px; display:flex; flex-direction:column; align-items:center; '
+        f'padding:10px 6px; border-radius:16px; background:{hl_bg}; flex-shrink:0;">'
+        f'<div style="font-size:12px; color:var(--text-secondary); font-weight:{fw}; margin-bottom:4px;">{h["hour"]}</div>'
+        f'<div style="font-size:26px; line-height:1; margin-bottom:6px;" aria-hidden="true">{_hour_icon(h)}</div>'
+        f'<div style="font-size:16px; font-weight:600; color:var(--text-primary);">{h["temp_c"]:.0f}°</div>'
+        f'<div style="font-size:11px; color:var(--accent); margin-top:3px;">{h["wind_kmh"]:.0f} km/h</div>'
+        f'</div>'
+    )
+    hour_cells += cell
+    
 st.markdown(f"""
 <div class="glass-card" style="padding:16px 0 10px;" role="region" aria-label="Hourly forecast">
-  <div style="padding:0 20px 10px; font-size:11px; letter-spacing:2px;
-              text-transform:uppercase; color:var(--text-secondary); font-weight:500;">
-    Hourly Forecast
-  </div>
-  <div class="hourly-strip">
-    {hour_cells}
-  </div>
+<div style="padding:0 20px 10px; font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--text-secondary); font-weight:500;">
+Hourly Forecast
+</div>
+<div class="hourly-strip">
+{hour_cells}
+</div>
 </div>
 """, unsafe_allow_html=True)
 
