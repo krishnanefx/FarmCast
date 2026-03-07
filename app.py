@@ -110,6 +110,7 @@ if default_region not in REGIONS:
 
 custom_lat = None
 custom_lon = None
+custom_location_name = None
 
 with st.sidebar:
     st.markdown(
@@ -134,7 +135,8 @@ with st.sidebar:
                     if _loc:
                         custom_lat = _loc.latitude
                         custom_lon = _loc.longitude
-                        st.caption(f"Found: {_loc.address.split(',')[0]}")
+                        custom_location_name = _loc.address.split(",")[0].strip()
+                        st.caption(f"Found: {custom_location_name}")
                     else:
                         st.caption("Location not found — using region centre.")
                 except Exception:
@@ -167,7 +169,7 @@ with st.sidebar:
     st.caption("Re-runs Pangu-Weather ONNX inference.\n📅 7-day: Days 1–2 via 6h model, Days 3–7 via 24h model.")
 
 st.query_params["region"] = selected_region
-resolved_location_name = selected_region
+resolved_location_name = custom_location_name if custom_location_name else selected_region
 
 # ---------------------------------------------------------------------------
 # Load forecast
